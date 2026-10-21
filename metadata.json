@@ -1,0 +1,6 @@
+{
+  "name": "Sistem Inventory & Pengeluaran Gudang",
+  "description": "Aplikasi manajemen stok gudang profesional dengan penerimaan barang SJ Supplier (LPB), nota pengambilan barang (Store Issue Voucher), alur persetujuan admin, cetak dokumen resmi, dan notifikasi real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
