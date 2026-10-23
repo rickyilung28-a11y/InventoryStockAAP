@@ -50,7 +50,7 @@ export const ImportStockItemsModal: React.FC<ImportStockItemsModalProps> = ({ on
 
       const sampleData = [
         [
-          'Kode SKU',
+          'Material Code',
           'Nama Barang',
           'Kategori',
           'Satuan',
@@ -185,7 +185,7 @@ export const ImportStockItemsModal: React.FC<ImportStockItemsModalProps> = ({ on
           const k = key.trim().toLowerCase();
           const v = String(val ?? '').trim();
 
-          if (k.includes('sku') || k.includes('kode') || k === 'id') {
+          if (k.includes('sku') || k.includes('kode') || k.includes('material') || k === 'id') {
             if (!sku && v) sku = v.toUpperCase();
           } else if (k.includes('nama') || k.includes('name') || k.includes('item') || k.includes('barang')) {
             if (!name && v) name = v;
@@ -219,7 +219,7 @@ export const ImportStockItemsModal: React.FC<ImportStockItemsModalProps> = ({ on
 
         if (!sku) {
           status = 'invalid';
-          errorMessage = 'Kode SKU wajib diisi';
+          errorMessage = 'Material Code wajib diisi';
         } else if (!name) {
           status = 'invalid';
           errorMessage = 'Nama barang wajib diisi';
@@ -336,7 +336,7 @@ export const ImportStockItemsModal: React.FC<ImportStockItemsModalProps> = ({ on
               <div>
                 <span className="font-bold text-emerald-950 block">Template Excel Resmi PT. AAP</span>
                 <span className="text-emerald-800 text-[11px]">
-                  Gunakan format kolom resmi agar pembacaan SKU, nama barang, rak, dan stok akurat.
+                  Gunakan format kolom resmi agar pembacaan Material Code, nama barang, rak, dan stok akurat.
                 </span>
               </div>
             </div>
@@ -454,7 +454,7 @@ export const ImportStockItemsModal: React.FC<ImportStockItemsModalProps> = ({ on
                   <thead className="bg-slate-100 text-slate-700 font-semibold sticky top-0 border-b border-slate-200">
                     <tr>
                       <th className="px-3 py-2 w-10 text-center">No</th>
-                      <th className="px-3 py-2 w-28">Kode SKU</th>
+                      <th className="px-3 py-2 w-28">Material Code</th>
                       <th className="px-3 py-2">Nama Barang</th>
                       <th className="px-3 py-2 w-24">Kategori</th>
                       <th className="px-3 py-2 w-16 text-center">Satuan</th>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useInventory } from '../context/InventoryContext';
 import {
   Building2,
@@ -7,13 +7,9 @@ import {
   RotateCcw,
   Save,
   CheckCircle2,
-  FileText,
   MapPin,
-  Phone,
-  Mail,
   Sparkles,
   Layers,
-  FileSpreadsheet,
 } from 'lucide-react';
 
 export const CompanySettingsView: React.FC = () => {
@@ -32,12 +28,24 @@ export const CompanySettingsView: React.FC = () => {
 
   const [isSavedNotice, setIsSavedNotice] = useState(false);
 
+  useEffect(() => {
+    setAppName(companyProfile.appName);
+    setAppTagline(companyProfile.appTagline);
+    setCompanyName(companyProfile.companyName);
+    setCity(companyProfile.city);
+    setAddress(companyProfile.address);
+    setPhone(companyProfile.phone || '');
+    setEmail(companyProfile.email || '');
+    setSivDocCode(companyProfile.sivDocCode);
+    setLpbDocCode(companyProfile.lpbDocCode);
+    setLogoUrl(companyProfile.logoUrl || '');
+  }, [companyProfile]);
+
   // Handle Logo Image Upload & conversion to Base64
   const handleLogoFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 2 * 1024 * 1024) {
-        alert('Ukuran file logo maksimal 2 MB agar tidak memperlambat penyimpanan.');
         return;
       }
       const reader = new FileReader();
@@ -52,15 +60,15 @@ export const CompanySettingsView: React.FC = () => {
   };
 
   const handleResetLogoToDefault = () => {
-    setLogoUrl('');
+    setLogoUrl('/logo-aap.svg');
   };
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
     updateCompanyProfile({
-      appName: appName.trim() || 'GudangPresisi',
-      appTagline: appTagline.trim() || 'SISTEM INVENTORY',
-      companyName: companyName.trim() || 'PT. Abadi Agrosindo Persada',
+      appName: appName.trim() || 'SISTEM INVENTORY CONTROL STORE',
+      appTagline: appTagline.trim() || 'PT ABADI AGROSINDO PERSADA',
+      companyName: companyName.trim() || 'PT ABADI AGROSINDO PERSADA',
       city: city.trim() || 'Sidoarjo',
       address: address.trim(),
       phone: phone.trim(),
@@ -75,23 +83,17 @@ export const CompanySettingsView: React.FC = () => {
   };
 
   const handleFullReset = () => {
-    if (
-      window.confirm(
-        'Kembalikan seluruh identitas perusahaan, nama aplikasi, logo, dan kode formulir ke setelan pabrik PT. Abadi Agrosindo Persada?'
-      )
-    ) {
-      resetCompanyProfile();
-      setAppName('GudangPresisi');
-      setAppTagline('SISTEM INVENTORY');
-      setCompanyName('PT. Abadi Agrosindo Persada');
-      setCity('Sidoarjo');
-      setAddress('Kawasan Industri & Pergudangan Lingkar Timur, Sidoarjo - Jawa Timur');
-      setPhone('(031) 895-2001');
-      setEmail('logistik.sidoarjo@agrosindo.co.id');
-      setSivDocCode('FR/AAP/G-STR/23/001');
-      setLpbDocCode('FR/AAP/G-LPB/23/002');
-      setLogoUrl('');
-    }
+    resetCompanyProfile();
+    setAppName('SISTEM INVENTORY CONTROL STORE');
+    setAppTagline('PT ABADI AGROSINDO PERSADA');
+    setCompanyName('PT ABADI AGROSINDO PERSADA');
+    setCity('Sidoarjo');
+    setAddress('Bakungtemenggungan Kec. Balongbendo Sidoarjo - Jawa Timur');
+    setPhone('');
+    setEmail('');
+    setSivDocCode('FR/AAP/G-STR/23/001');
+    setLpbDocCode('FR/AAP/G-LPB/23/002');
+    setLogoUrl('/logo-aap.svg');
   };
 
   return (
@@ -147,26 +149,11 @@ export const CompanySettingsView: React.FC = () => {
               <div className="flex flex-col sm:flex-row sm:items-center gap-5 p-4 bg-slate-50 border border-slate-200 rounded-xl">
                 {/* Logo Box Preview */}
                 <div className="w-20 h-20 rounded-xl bg-white border-2 border-dashed border-slate-300 flex items-center justify-center p-2 shrink-0 overflow-hidden shadow-2xs">
-                  {logoUrl ? (
-                    <img
-                      src={logoUrl}
-                      alt="Logo Perusahaan"
-                      className="w-full h-full object-contain"
-                    />
-                  ) : (
-                    <svg
-                      className="w-12 h-12 text-slate-900"
-                      viewBox="0 0 64 64"
-                      fill="currentColor"
-                    >
-                      <path d="M28 32C24 20 13 15 8 17C8 26 18 31 28 32Z" />
-                      <path d="M32 30C36 17 48 12 53 14C53 24 42 29 32 30Z" />
-                      <path d="M28 32C30 39 30 45 31 48H34C33 44 33 37 32 30" />
-                      <rect x="10" y="48" width="44" height="3.5" rx="1" />
-                      <rect x="14" y="53" width="36" height="2.5" rx="1" />
-                      <rect x="20" y="57" width="24" height="2" rx="1" />
-                    </svg>
-                  )}
+                  <img
+                    src={logoUrl || '/logo-aap.svg'}
+                    alt="Logo Perusahaan"
+                    className="w-full h-full object-contain"
+                  />
                 </div>
 
                 {/* Upload & Reset Buttons */}
@@ -257,7 +244,7 @@ export const CompanySettingsView: React.FC = () => {
                     required
                     value={companyName}
                     onChange={(e) => setCompanyName(e.target.value)}
-                    placeholder="Contoh: PT. Abadi Agrosindo Persada"
+                    placeholder="PT ABADI AGROSINDO PERSADA"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-bold text-slate-900 uppercase"
                   />
                 </div>
@@ -271,7 +258,7 @@ export const CompanySettingsView: React.FC = () => {
                     required
                     value={city}
                     onChange={(e) => setCity(e.target.value)}
-                    placeholder="Contoh: Sidoarjo"
+                    placeholder="Sidoarjo"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
                   />
                 </div>
@@ -284,7 +271,7 @@ export const CompanySettingsView: React.FC = () => {
                     type="text"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
-                    placeholder="Contoh: Kawasan Industri & Pergudangan Lingkar Timur, Sidoarjo - Jawa Timur"
+                    placeholder="Bakungtemenggungan Kec. Balongbendo Sidoarjo - Jawa Timur"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
                   />
                 </div>
@@ -297,7 +284,7 @@ export const CompanySettingsView: React.FC = () => {
                     type="text"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="Contoh: (031) 895-2001"
+                    placeholder="(Kosong)"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
                   />
                 </div>
@@ -310,7 +297,7 @@ export const CompanySettingsView: React.FC = () => {
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="Contoh: logistik.sidoarjo@agrosindo.co.id"
+                    placeholder="(Kosong)"
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
                   />
                 </div>
@@ -378,17 +365,11 @@ export const CompanySettingsView: React.FC = () => {
               <div className="bg-white text-slate-900 p-3.5 rounded-xl border border-slate-300 shadow-inner text-xs space-y-2">
                 <div className="flex items-start justify-between border-b-2 border-slate-900 pb-2">
                   <div className="flex items-center gap-2">
-                    {logoUrl ? (
-                      <img src={logoUrl} alt="Logo" className="w-9 h-9 object-contain" />
-                    ) : (
-                      <svg className="w-8 h-8 text-slate-900 shrink-0" viewBox="0 0 64 64" fill="currentColor">
-                        <path d="M28 32C24 20 13 15 8 17C8 26 18 31 28 32Z" />
-                        <path d="M32 30C36 17 48 12 53 14C53 24 42 29 32 30Z" />
-                        <path d="M28 32C30 39 30 45 31 48H34C33 44 33 37 32 30" />
-                        <rect x="10" y="48" width="44" height="3.5" rx="1" />
-                        <rect x="14" y="53" width="36" height="2.5" rx="1" />
-                      </svg>
-                    )}
+                    <img
+                      src={logoUrl || '/logo-aap.svg'}
+                      alt="Logo"
+                      className="w-9 h-9 object-contain shrink-0"
+                    />
                     <div>
                       <div className="font-extrabold text-[11px] leading-tight uppercase">
                         {companyName || 'NAMA PERUSAHAAN'}

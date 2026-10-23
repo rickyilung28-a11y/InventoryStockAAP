@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { LPBDocument, IssueVoucherDocument } from '../types/inventory';
+import React, { useState, useRef, useEffect } from 'react';
+import { LPBDocument, IssueVoucherDocument, UserAccount } from '../types/inventory';
 import { useInventory } from '../context/InventoryContext';
 import {
   Printer,
@@ -24,37 +24,59 @@ interface PrintDocumentModalProps {
   onClose: () => void;
 }
 
-// Logo Tunas Tanaman PT. Abadi Agrosindo Persada (Sesuai Form Fisik Asli)
+// Logo Tunas Tanaman PT. Abadi Agrosindo Persada
 const AapSproutLogo = ({ className = 'w-10 h-10' }: { className?: string }) => (
-  <svg
-    className={`${className} shrink-0 text-slate-900`}
-    viewBox="0 0 64 64"
-    fill="currentColor"
-    xmlns="http://www.w3.org/2000/svg"
-  >
-    {/* Daun Kiri & Kanan */}
-    <path d="M29 33C24 19 12 14 7 16C8 26 19 32 29 33Z" />
-    <path d="M32 30C37 16 49 10 56 12C54 23 42 29 32 30Z" />
-    {/* Batang Tengah */}
-    <path d="M28.5 32C30 39 30 45 30 49H34C33.5 44 33.5 37 32.5 29.5" />
-    {/* Tanah & Akar Bawah */}
-    <rect x="11" y="45" width="42" height="5" />
-    <rect x="11" y="51.5" width="42" height="3.5" />
-    <rect x="11" y="56.5" width="42" height="2.5" />
-    {/* Garis Akar Putih di Tengah Tanah */}
-    <path
-      d="M32 45V58M32 48L24 55M32 49L40 55M28 52L20 58M36 52L44 58"
-      stroke="#ffffff"
-      strokeWidth="1.4"
-      strokeLinecap="round"
-    />
-  </svg>
+  <img
+    src="/logo-aap.svg"
+    alt="Logo PT Abadi Agrosindo Persada"
+    className={`${className} shrink-0 object-contain`}
+  />
 );
 
-// Stempel / Badge ACC Digital Resmi dengan Tanggal & Jam (Opsional untuk SIV)
+// Helper mencari akun user berdasarkan ID, username, atau nama lengkap
+const resolveSignerAccount = (
+  users: UserAccount[],
+  opts: {
+    id?: string;
+    username?: string;
+    name?: string;
+    fallbackRole?: UserAccount['role'];
+  }
+): { id: string; username: string; name: string } => {
+  const cleanId = (opts.id || '').trim();
+  const cleanUname = (opts.username || '').trim().replace(/^@/, '');
+  const cleanName = (opts.name || '')
+    .replace(/\s*\(.*?\)\s*/g, '')
+    .trim();
+
+  let matched: UserAccount | undefined;
+  if (cleanId && cleanId !== 'unknown') {
+    matched = users.find((u) => u.id === cleanId);
+  }
+  if (!matched && cleanUname) {
+    matched = users.find((u) => u.username.toLowerCase() === cleanUname.toLowerCase());
+  }
+  if (!matched && cleanName) {
+    matched = users.find((u) => u.name.trim().toLowerCase() === cleanName.toLowerCase());
+  }
+  if (!matched && opts.fallbackRole) {
+    matched = users.find((u) => u.role === opts.fallbackRole);
+  }
+
+  return {
+    id: matched?.id || (cleanId && cleanId !== 'unknown' ? cleanId : '-'),
+    username: matched?.username || cleanUname || '-',
+    name: matched?.name || cleanName || '-',
+  };
+};
+
+// Stempel / Badge ACC Digital Resmi dengan Nama Akun, ID Akun, Tanggal & Jam
 const DigitalAccStamp: React.FC<{
   badge?: string;
   title: string;
+  signerName?: string;
+  accountId?: string;
+  accountUsername?: string;
   date: string;
   time: string;
   officerRole?: string;
@@ -62,8 +84,11 @@ const DigitalAccStamp: React.FC<{
   colorScheme?: 'blue' | 'emerald' | 'amber';
   compact?: boolean;
 }> = ({
-  badge = 'ACC DIGITAL',
+  badge = 'TTD DIGITAL',
   title,
+  signerName,
+  accountId,
+  accountUsername,
   date,
   time,
   officerRole,
@@ -104,21 +129,39 @@ const DigitalAccStamp: React.FC<{
     >
       <div
         className={`inline-block ${styles.badgeBg} font-mono ${
-          compact ? 'text-[6.5px]' : 'text-[7.5px]'
+          compact ? 'text-[6px]' : 'text-[7px]'
         } font-extrabold px-1.5 py-0.2 rounded-xs uppercase tracking-wider`}
       >
         {badge}
       </div>
       <div
         className={`${
-          compact ? 'text-[7.5px]' : 'text-[8.5px]'
-        } font-bold uppercase tracking-tight mt-0.5 leading-tight ${styles.titleColor}`}
+          compact ? 'text-[7px]' : 'text-[8px]'
+        } font-bold uppercase tracking-tight mt-0.5 leading-tight ${styles.titleColor} truncate`}
       >
         {title}
       </div>
+      {signerName && signerName !== '-' && (
+        <div
+          className={`${
+            compact ? 'text-[7px]' : 'text-[8px]'
+          } font-extrabold leading-tight truncate ${styles.titleColor}`}
+        >
+          {signerName}
+        </div>
+      )}
+      {((accountUsername && accountUsername !== '-') || (accountId && accountId !== '-')) && (
+        <div className="font-mono text-[6px] font-semibold text-slate-700 leading-tight truncate">
+          {accountUsername && accountUsername !== '-' ? `@${accountUsername}` : ''}
+          {accountUsername && accountUsername !== '-' && accountId && accountId !== '-'
+            ? ' • '
+            : ''}
+          {accountId && accountId !== '-' ? `ID:${accountId}` : ''}
+        </div>
+      )}
       <div
         className={`mt-0.5 font-mono ${
-          compact ? 'text-[7px]' : 'text-[8px]'
+          compact ? 'text-[6.5px]' : 'text-[7.5px]'
         } font-semibold leading-tight border-t border-b border-dashed border-slate-300 py-0.5 ${
           styles.textColor
         }`}
@@ -128,7 +171,7 @@ const DigitalAccStamp: React.FC<{
       </div>
       {officerRole && (
         <div
-          className={`text-[6.5px] font-medium uppercase tracking-tight mt-0.5 ${styles.subColor}`}
+          className={`text-[6px] font-medium uppercase tracking-tight mt-0.5 ${styles.subColor}`}
         >
           {officerRole}
         </div>
@@ -205,19 +248,14 @@ const wrapTextToLines = (text: string, maxCharsPerLine: number): string[] => {
 
 // =========================================================================
 // 1. KOMPONEN BLOK TUNGGAL NOTA PENGAMBILAN BARANG (SIV)
-//    Persis sesuai gambar fisik:
-//    - Header Kiri: Logo Tunas + PT. Abadi Agrosindo Persada / Sidoarjo
-//    - Header Tengah: NOTA PENGAMBILAN BARANG / STORE ISSUE VOUCHER
-//    - Header Kanan: Box [FR/AAP/G-STR/23/001], Tanggal : DD/MM/YYYY, No. Doc :
-//    - Tabel: No | MATERIAL CODE | NAMA BARANG | JUMLAH | SAT | COST CENTER | GL ACC
-//    - Box tengah: "Spare part tersebut di atas akan kami gunakan untuk"
-//    - Tabel TTD 4 Kolom:
-//      PERMINTAAN/PENGAMBILAN BARANG (DITERIMA | DISETUJUI)
-//      PENYERAHAN/PENGELUARAN BARANG (DISERAHKAN | DISETUJUI)
-//    - Footnote: Putih : Akunting   Kuning : Gudang
+//    - Ukuran A5 (Kertas A4 Portrait dibagi 2 Atas & Bawah: Arsip Store & Purchasing)
 // =========================================================================
 interface SingleNotaBlockProps {
   npb: IssueVoucherDocument;
+  users: UserAccount[];
+  copyLabel?: string;
+  copyBadgeColor?: 'blue' | 'emerald';
+  paperCopyColorNote?: string;
   formatFullDate: (dateStr: string) => string;
   reqApprovalStamp: { date: string; time: string };
   handoverStamp: { date: string; time: string };
@@ -245,6 +283,10 @@ interface SivDisplayRow {
 
 const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
   npb,
+  users,
+  copyLabel,
+  copyBadgeColor = 'blue',
+  paperCopyColorNote,
   formatFullDate,
   reqApprovalStamp,
   handoverStamp,
@@ -256,9 +298,14 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
   logoUrl,
   docCode,
 }) => {
+  const badgeClasses = {
+    blue: 'border-blue-900 bg-blue-50 text-blue-900',
+    emerald: 'border-emerald-900 bg-emerald-50 text-emerald-900',
+  }[copyBadgeColor];
+
   // Kapasitas karakter per baris untuk kolom NAMA BARANG pada SIV
   const maxNameChars = isSideBySide ? 26 : 44;
-  // Jumlah minimal baris mengikuti form fisik (6 baris di gambar, atau lebih jika item panjang)
+  // Jumlah minimal baris mengikuti form fisik (6 baris pada A5 Atas-Bawah)
   const targetMinRows = isSideBySide ? 8 : 6;
 
   // KETENTUAN BARU:
@@ -323,21 +370,52 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
     });
   }
 
-  // Penentuan nama untuk 4 kolom tanda tangan SIV sesuai ketentuan:
+  // Penentuan nama & akun (ID akun + username + nama akun) untuk 4 kolom tanda tangan SIV:
   // 1. Permintaan - Diterima  : nama penerima (yang diinputkan admin)
-  // 2. Permintaan - Disetujui : User yang Menerbitkan Nota Pengambilan Barang
-  // 3. Penyerahan - Diserahkan: nama User yang ACC SIV + TTD Digital Tanggal dan Waktu Penyerahan
-  // 4. Penyerahan - Disetujui : (Nama Kepala Gudang) + TTD Digital tanggal dan waktu ACC SIV
+  // 2. Permintaan - Disetujui : Akun User yang Menerbitkan Nota Pengambilan Barang
+  // 3. Penyerahan - Diserahkan: Akun User Admin Store yang ACC SIV + TTD Digital
+  // 4. Penyerahan - Disetujui : Akun Kepala Store yang Verifikasi Pengeluaran Stok + TTD Digital
   const recipientDisplayName = npb.recipientName || '';
-  const issuerDisplayName = npb.requestedBy || npb.approvedByRequester || '';
-  const accSivUserDisplayName = npb.approvedByAdmin || npb.handoverOfficer || '';
-  const warehouseHeadDisplayName =
-    npb.approvedByWarehouseHead || npb.approvedByAdmin || 'Suryadi';
 
-  const isApprovedOrCompleted =
-    npb.status === 'APPROVED' || npb.status === 'HANDOVER_COMPLETED';
+  const issuerAccount = resolveSignerAccount(users, {
+    id: npb.userId,
+    username: npb.requesterUsername,
+    name: npb.requestedBy || npb.approvedByRequester,
+  });
+  const issuerDisplayName = issuerAccount.name !== '-' ? issuerAccount.name : npb.requestedBy || '';
+
+  const adminAccount = resolveSignerAccount(users, {
+    id: npb.approvedByAdminId,
+    username: npb.approvedByAdminUsername,
+    name: npb.approvedByAdmin || npb.handoverOfficer,
+    fallbackRole: npb.approvedByAdmin || npb.handoverOfficer ? 'admin' : undefined,
+  });
+  const accSivUserDisplayName =
+    npb.approvedByAdmin || npb.handoverOfficer
+      ? adminAccount.name !== '-'
+        ? adminAccount.name
+        : npb.approvedByAdmin || npb.handoverOfficer || ''
+      : '';
+
+  const whHeadAccount = resolveSignerAccount(users, {
+    id: npb.approvedByWarehouseHeadId,
+    username: npb.approvedByWarehouseHeadUsername,
+    name: npb.approvedByWarehouseHead || npb.warehouseHeadName,
+    fallbackRole: 'kepala_gudang',
+  });
+  const warehouseHeadDisplayName =
+    npb.status === 'HANDOVER_COMPLETED' || npb.approvedByWarehouseHead || npb.warehouseHeadName
+      ? whHeadAccount.name !== '-'
+        ? whHeadAccount.name
+        : npb.approvedByWarehouseHead || npb.warehouseHeadName || ''
+      : '';
+
+  const isHeadVerified =
+    npb.status === 'HANDOVER_COMPLETED' || Boolean(npb.headApprovedAt || npb.approvedByWarehouseHead);
   const isHandoverDone =
-    npb.status === 'HANDOVER_COMPLETED' || Boolean(npb.handoverAt || npb.recipientName);
+    npb.status === 'APPROVED' ||
+    npb.status === 'HANDOVER_COMPLETED' ||
+    Boolean(npb.handoverAt || npb.approvedByAdmin);
 
   return (
     <div className="bg-white text-slate-900 select-text flex flex-col h-full justify-between">
@@ -378,19 +456,28 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
             </div>
           </div>
 
-          {/* Kanan: Kotak Kode Dokumen + Tanggal & No. Doc */}
-          <div className="shrink-0 text-left">
-            <div
-              className={`border border-slate-900 ${
-                isSideBySide ? 'px-2 py-0.5 text-[8.5px]' : 'px-4 py-0.5 text-[10px]'
-              } font-bold text-slate-900 text-center tracking-wide mb-1`}
-            >
-              {docCode || 'FR/AAP/G-STR/23/001'}
+          {/* Kanan: Badge Lembar + Kotak Kode Dokumen + Tanggal & No. Doc */}
+          <div className="shrink-0 text-right">
+            <div className="flex items-center justify-end gap-1 mb-1 flex-wrap">
+              {copyLabel && (
+                <span
+                  className={`inline-block border px-1.5 py-0.5 font-bold text-[8px] uppercase tracking-wider rounded-xs ${badgeClasses}`}
+                >
+                  {copyLabel}
+                </span>
+              )}
+              <div
+                className={`border border-slate-900 ${
+                  isSideBySide ? 'px-2 py-0.5 text-[8.5px]' : 'px-3 py-0.5 text-[9.5px]'
+                } font-bold text-slate-900 text-center tracking-wide bg-slate-50`}
+              >
+                {docCode || 'FR/AAP/G-STR/23/001'}
+              </div>
             </div>
             <div
               className={`${
-                isSideBySide ? 'text-[9px]' : 'text-[10.5px]'
-              } text-slate-900 space-y-0.5`}
+                isSideBySide ? 'text-[9px]' : 'text-[10px]'
+              } text-slate-900 space-y-0.5 text-left inline-block`}
             >
               <div className="grid grid-cols-[46px_8px_1fr] items-baseline">
                 <span className="font-medium">Tanggal</span>
@@ -407,20 +494,20 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
         </div>
 
         {/* Judul Tengah: NOTA PENGAMBILAN BARANG / STORE ISSUE VOUCHER */}
-        <div className="text-center -mt-2 mb-2">
+        <div className="text-center -mt-1.5 mb-1.5">
           <h2
             className={`${
-              isSideBySide ? 'text-[12px]' : 'text-sm sm:text-base'
+              isSideBySide ? 'text-[12px]' : 'text-sm'
             } font-extrabold uppercase tracking-wide text-slate-900 leading-tight`}
           >
-            NOTA PENGAMBILAN BARANG
+            NOTA PENGAMBILAN BARANG (SIV)
           </h2>
           <p
             className={`${
-              isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
-            } font-medium uppercase tracking-wider text-slate-800 leading-tight`}
+              isSideBySide ? 'text-[8px]' : 'text-[9px]'
+            } font-bold uppercase tracking-wider text-slate-700 leading-tight`}
           >
-            STORE ISSUE VOUCHER
+            STORE ISSUE VOUCHER &mdash; UKURAN A5
           </p>
         </div>
       </div>
@@ -431,8 +518,8 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
           <table className="w-full h-full border-collapse text-slate-900">
             <thead>
               <tr
-                className={`border-b border-slate-900 font-bold text-slate-900 text-center uppercase ${
-                  isSideBySide ? 'text-[8px] h-6' : 'text-[9.5px] h-7'
+                className={`border-b border-slate-900 font-bold text-slate-900 text-center uppercase bg-slate-100 ${
+                  isSideBySide ? 'text-[8px] h-5.5' : 'text-[9px] h-6'
                 }`}
               >
                 <th className="border-r border-slate-900 px-1 w-7 text-center">No</th>
@@ -475,7 +562,7 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                 <tr
                   key={row.rowKey}
                   className={`${
-                    isSideBySide ? 'text-[9px] h-6' : 'text-[10.5px] h-7'
+                    isSideBySide ? 'text-[9px] h-5.5' : 'text-[10px] h-6'
                   } text-slate-900`}
                 >
                   {/* No (dengan titik seperti "1.", "2.", kosong jika baris lanjutan nama panjang) */}
@@ -520,19 +607,19 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
       </div>
 
       {/* BAGIAN BAWAH: KOTAK KEPERLUAN + TABEL 4 KOLOM TANDA TANGAN + FOOTNOTE */}
-      <div className="mt-2">
+      <div className="mt-1.5">
         {/* Kotak: "Spare part tersebut di atas akan kami gunakan untuk" */}
         <div
           className={`border border-slate-900 px-2.5 py-1 ${
-            isSideBySide ? 'min-h-[38px]' : 'min-h-[46px]'
+            isSideBySide ? 'min-h-[34px]' : 'min-h-[38px]'
           } flex flex-col justify-between bg-white`}
         >
-          <div className={`${isSideBySide ? 'text-[8.5px]' : 'text-[9.5px]'} text-slate-800`}>
+          <div className={`${isSideBySide ? 'text-[8px]' : 'text-[9px]'} text-slate-800`}>
             Spare part tersebut di atas akan kami gunakan untuk
           </div>
           <div
             className={`${
-              isSideBySide ? 'text-[10px]' : 'text-xs'
+              isSideBySide ? 'text-[9.5px]' : 'text-[11px]'
             } font-semibold text-slate-900 pl-2 pt-0.5`}
           >
             {npb.purpose
@@ -542,12 +629,12 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
         </div>
 
         {/* Tabel Tanda Tangan 2 Grup (4 Kolom): PERMINTAAN/PENGAMBILAN BARANG & PENYERAHAN/PENGELUARAN BARANG */}
-        <div className="border border-slate-900 mt-2 text-slate-900 bg-white">
+        <div className="border border-slate-900 mt-1.5 text-slate-900 bg-white">
           <table className="w-full border-collapse">
             <thead>
               <tr
-                className={`border-b border-slate-900 font-semibold text-center uppercase ${
-                  isSideBySide ? 'text-[8px]' : 'text-[9.5px]'
+                className={`border-b border-slate-900 font-semibold text-center uppercase bg-slate-100 ${
+                  isSideBySide ? 'text-[8px]' : 'text-[9px]'
                 }`}
               >
                 <th colSpan={2} className="border-r border-slate-900 py-0.5 px-1 w-1/2">
@@ -559,7 +646,7 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
               </tr>
               <tr
                 className={`border-b border-slate-900 font-semibold text-center uppercase ${
-                  isSideBySide ? 'text-[8px]' : 'text-[9.5px]'
+                  isSideBySide ? 'text-[8px]' : 'text-[9px]'
                 }`}
               >
                 <th className="border-r border-slate-900 py-0.5 px-1 w-1/4">DITERIMA</th>
@@ -573,7 +660,7 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                 {/* Kolom 1: PERMINTAAN/PENGAMBILAN BARANG -> DITERIMA : Nama Penerima (yang diinputkan admin) */}
                 <td
                   className={`border-r border-slate-900 p-1 align-bottom ${
-                    isSideBySide ? 'h-20' : 'h-24'
+                    isSideBySide ? 'h-18' : 'h-20'
                   }`}
                 >
                   <div className="flex flex-col justify-between items-center h-full">
@@ -582,7 +669,7 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                     </div>
                     <div
                       className={`flex items-center justify-between w-full px-1 ${
-                        isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
+                        isSideBySide ? 'text-[8.5px]' : 'text-[9.5px]'
                       } font-semibold text-slate-900`}
                     >
                       <span>(</span>
@@ -592,10 +679,10 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                   </div>
                 </td>
 
-                {/* Kolom 2: PERMINTAAN/PENGAMBILAN BARANG -> DISETUJUI : User yang Menerbitkan Nota Pengambilan Barang */}
+                {/* Kolom 2: PERMINTAAN/PENGAMBILAN BARANG -> DISETUJUI : Akun yang Menerbitkan Nota Pengambilan Barang */}
                 <td
                   className={`border-r border-slate-900 p-1 align-bottom ${
-                    isSideBySide ? 'h-20' : 'h-24'
+                    isSideBySide ? 'h-20' : 'h-22'
                   }`}
                 >
                   <div className="flex flex-col justify-between items-center h-full">
@@ -604,6 +691,9 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                         <DigitalAccStamp
                           badge="TTD DIGITAL"
                           title="PENERBIT NOTA SIV"
+                          signerName={issuerDisplayName}
+                          accountId={issuerAccount.id}
+                          accountUsername={issuerAccount.username}
                           date={reqApprovalStamp.date}
                           time={reqApprovalStamp.time}
                           colorScheme="amber"
@@ -611,22 +701,31 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                         />
                       )}
                     </div>
-                    <div
-                      className={`flex items-center justify-between w-full px-1 ${
-                        isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
-                      } font-semibold text-slate-900`}
-                    >
-                      <span>(</span>
-                      <span className="truncate px-1 text-center">{issuerDisplayName}</span>
-                      <span>)</span>
+                    <div className="w-full text-center">
+                      <div
+                        className={`flex items-center justify-between w-full px-1 ${
+                          isSideBySide ? 'text-[8.5px]' : 'text-[9.5px]'
+                        } font-semibold text-slate-900`}
+                      >
+                        <span>(</span>
+                        <span className="truncate px-1 text-center">{issuerDisplayName}</span>
+                        <span>)</span>
+                      </div>
+                      {(issuerAccount.username !== '-' || issuerAccount.id !== '-') && (
+                        <div className="text-[6.5px] font-mono text-slate-600 leading-tight truncate">
+                          {issuerAccount.username !== '-' ? `@${issuerAccount.username}` : ''}
+                          {issuerAccount.username !== '-' && issuerAccount.id !== '-' ? ' • ' : ''}
+                          {issuerAccount.id !== '-' ? `ID: ${issuerAccount.id}` : ''}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </td>
 
-                {/* Kolom 3: PENYERAHAN/PENGELUARAN BARANG -> DISERAHKAN : Nama User yang ACC SIV, TTD Digital Tanggal dan Waktu Penyerahan */}
+                {/* Kolom 3: PENYERAHAN/PENGELUARAN BARANG -> DISERAHKAN : Akun Admin Store yang ACC SIV */}
                 <td
                   className={`border-r border-slate-900 p-1 align-bottom ${
-                    isSideBySide ? 'h-20' : 'h-24'
+                    isSideBySide ? 'h-20' : 'h-22'
                   }`}
                 >
                   <div className="flex flex-col justify-between items-center h-full">
@@ -634,7 +733,10 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                       {showDigitalStamp && isHandoverDone && (
                         <DigitalAccStamp
                           badge="TTD DIGITAL"
-                          title="DISERAHKAN"
+                          title="DISERAHKAN (ADMIN STORE)"
+                          signerName={accSivUserDisplayName}
+                          accountId={adminAccount.id}
+                          accountUsername={adminAccount.username}
                           date={handoverStamp.date}
                           time={handoverStamp.time}
                           colorScheme="blue"
@@ -642,26 +744,39 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                         />
                       )}
                     </div>
-                    <div
-                      className={`flex items-center justify-between w-full px-1 ${
-                        isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
-                      } font-semibold text-slate-900`}
-                    >
-                      <span>(</span>
-                      <span className="truncate px-1 text-center">{accSivUserDisplayName}</span>
-                      <span>)</span>
+                    <div className="w-full text-center">
+                      <div
+                        className={`flex items-center justify-between w-full px-1 ${
+                          isSideBySide ? 'text-[8.5px]' : 'text-[9.5px]'
+                        } font-semibold text-slate-900`}
+                      >
+                        <span>(</span>
+                        <span className="truncate px-1 text-center">{accSivUserDisplayName}</span>
+                        <span>)</span>
+                      </div>
+                      {isHandoverDone &&
+                        (adminAccount.username !== '-' || adminAccount.id !== '-') && (
+                          <div className="text-[6.5px] font-mono text-slate-600 leading-tight truncate">
+                            {adminAccount.username !== '-' ? `@${adminAccount.username}` : ''}
+                            {adminAccount.username !== '-' && adminAccount.id !== '-' ? ' • ' : ''}
+                            {adminAccount.id !== '-' ? `ID: ${adminAccount.id}` : ''}
+                          </div>
+                        )}
                     </div>
                   </div>
                 </td>
 
-                {/* Kolom 4: PENYERAHAN/PENGELUARAN BARANG -> DISETUJUI : (Nama Kepala Gudang), TTD Digital tanggal dan waktu ACC SIV */}
-                <td className={`p-1 align-bottom ${isSideBySide ? 'h-20' : 'h-24'}`}>
+                {/* Kolom 4: PENYERAHAN/PENGELUARAN BARANG -> DISETUJUI : Akun Kepala Store yang Verifikasi SIV */}
+                <td className={`p-1 align-bottom ${isSideBySide ? 'h-20' : 'h-22'}`}>
                   <div className="flex flex-col justify-between items-center h-full">
                     <div className="flex-1 w-full flex items-center justify-center p-0.5">
-                      {showDigitalStamp && isApprovedOrCompleted && (
+                      {showDigitalStamp && isHeadVerified && (
                         <DigitalAccStamp
                           badge="TTD DIGITAL"
-                          title="ACC SIV - KA. GUDANG"
+                          title="ACC SIV - KA. STORE"
+                          signerName={warehouseHeadDisplayName}
+                          accountId={whHeadAccount.id}
+                          accountUsername={whHeadAccount.username}
                           date={whLeaderStamp.date}
                           time={whLeaderStamp.time}
                           colorScheme="emerald"
@@ -669,14 +784,28 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
                         />
                       )}
                     </div>
-                    <div
-                      className={`flex items-center justify-between w-full px-1 ${
-                        isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
-                      } font-semibold text-slate-900`}
-                    >
-                      <span>(</span>
-                      <span className="truncate px-1 text-center">{warehouseHeadDisplayName}</span>
-                      <span>)</span>
+                    <div className="w-full text-center">
+                      <div
+                        className={`flex items-center justify-between w-full px-1 ${
+                          isSideBySide ? 'text-[8.5px]' : 'text-[9.5px]'
+                        } font-semibold text-slate-900`}
+                      >
+                        <span>(</span>
+                        <span className="truncate px-1 text-center">
+                          {warehouseHeadDisplayName}
+                        </span>
+                        <span>)</span>
+                      </div>
+                      {isHeadVerified &&
+                        (whHeadAccount.username !== '-' || whHeadAccount.id !== '-') && (
+                          <div className="text-[6.5px] font-mono text-slate-600 leading-tight truncate">
+                            {whHeadAccount.username !== '-' ? `@${whHeadAccount.username}` : ''}
+                            {whHeadAccount.username !== '-' && whHeadAccount.id !== '-'
+                              ? ' • '
+                              : ''}
+                            {whHeadAccount.id !== '-' ? `ID: ${whHeadAccount.id}` : ''}
+                          </div>
+                        )}
                     </div>
                   </div>
                 </td>
@@ -685,14 +814,21 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
           </table>
         </div>
 
-        {/* Footnote Persis Gambar: Putih : Akunting   Kuning : Gudang */}
+        {/* Footnote SIV: Putih : Arsip Store   Kuning : Penerima Barang */}
         <div
-          className={`flex items-center gap-10 ${
-            isSideBySide ? 'text-[8.5px]' : 'text-[10px]'
-          } font-medium text-slate-900 mt-1 px-1`}
+          className={`flex items-center justify-between ${
+            isSideBySide ? 'text-[8px]' : 'text-[9px]'
+          } font-semibold text-slate-900 mt-1 px-1`}
         >
-          <span>Putih : Akunting</span>
-          <span>Kuning : Gudang</span>
+          <div className="flex items-center gap-6">
+            <span>Putih : Arsip Store</span>
+            <span>Kuning : Penerima Barang</span>
+          </div>
+          {paperCopyColorNote && (
+            <span className="text-[8px] font-mono italic text-slate-600 truncate">
+              {paperCopyColorNote}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -709,10 +845,14 @@ const SingleNotaBlock: React.FC<SingleNotaBlockProps> = ({
 // =========================================================================
 interface SingleLpbBlockProps {
   lpb: LPBDocument;
+  users: UserAccount[];
   copyLabel: string;
   copyBadgeColor: 'blue' | 'emerald';
   paperCopyColorNote: string;
   formatShortDate: (dateStr: string) => string;
+  lpbAdminStamp: { date: string; time: string };
+  lpbHeadStamp: { date: string; time: string };
+  showDigitalStamp?: boolean;
   isCompact?: boolean;
   isSideBySide?: boolean;
   companyName: string;
@@ -736,10 +876,14 @@ interface LpbDisplayRow {
 
 const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
   lpb,
+  users,
   copyLabel,
   copyBadgeColor,
   paperCopyColorNote,
   formatShortDate,
+  lpbAdminStamp,
+  lpbHeadStamp,
+  showDigitalStamp = true,
   isCompact = true,
   isSideBySide = false,
   companyName,
@@ -752,6 +896,20 @@ const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
     blue: 'border-blue-900 bg-blue-50 text-blue-900',
     emerald: 'border-emerald-900 bg-emerald-50 text-emerald-900',
   }[copyBadgeColor];
+
+  const lpbAdminAccount = resolveSignerAccount(users, {
+    id: lpb.receivedByAdminId,
+    username: lpb.receivedByAdminUsername,
+    name: lpb.receivedByAdmin,
+    fallbackRole: 'admin',
+  });
+  const lpbHeadAccount = resolveSignerAccount(users, {
+    id: lpb.approvedByWarehouseHeadId,
+    username: lpb.approvedByWarehouseHeadUsername,
+    name: lpb.approvedByWarehouseHead || lpb.verifiedBy,
+    fallbackRole: 'kepala_gudang',
+  });
+  const isLpbApproved = lpb.status === 'APPROVED';
 
   // Batas karakter per baris pada kolom Nama Barang:
   // Pada mode A5 (A4 dibagi 2 Kanan & Kiri), setiap > 27 karakter otomatis diteruskan ke baris bawahnya
@@ -1025,7 +1183,7 @@ const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
           </div>
         </div>
 
-        {/* 3 TANDA TANGAN MANUAL (Semua TTD Manual Basah untuk LPB) */}
+        {/* 3 KOLOM TANDA TANGAN LPB (Dengan Nama Akun & ID Akun Dinamis) */}
         <div className="border border-slate-900 border-t-0 text-slate-900 bg-white">
           <table className="w-full border-collapse text-[8.5px]">
             <thead>
@@ -1034,15 +1192,15 @@ const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
                   Pengirim / Sopir,
                 </th>
                 <th className="border-r border-slate-900 py-0.5 px-1.5 w-1/3">
-                  Diperiksa Oleh,
+                  Diperiksa Oleh (Admin Store),
                 </th>
-                <th className="py-0.5 px-1.5 w-1/3">Diterima Oleh,</th>
+                <th className="py-0.5 px-1.5 w-1/3">Disetujui Oleh (Kepala Store),</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 {/* 1. Pengirim / Sopir (Manual) */}
-                <td className="border-r border-slate-900 p-1 text-center align-bottom h-16">
+                <td className="border-r border-slate-900 p-1 text-center align-bottom h-20">
                   <div className="flex flex-col justify-between items-center h-full">
                     <div className="flex-1 w-full flex items-center justify-center">
                       <span className="text-[7px] text-slate-400 italic select-none">
@@ -1060,38 +1218,81 @@ const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
                   </div>
                 </td>
 
-                {/* 2. Diperiksa Oleh (Staff Gudang Manual) */}
-                <td className="border-r border-slate-900 p-1 text-center align-bottom h-16">
+                {/* 2. Diperiksa Oleh (Admin Store — TTD Digital berdasarkan ID Akun & Nama Akun) */}
+                <td className="border-r border-slate-900 p-1 text-center align-bottom h-20">
                   <div className="flex flex-col justify-between items-center h-full">
-                    <div className="flex-1 w-full flex items-center justify-center">
-                      <span className="text-[7px] text-slate-400 italic select-none">
-                        ( Tanda Tangan Basah )
-                      </span>
+                    <div className="flex-1 w-full flex items-center justify-center p-0.5">
+                      {showDigitalStamp ? (
+                        <DigitalAccStamp
+                          badge="TTD DIGITAL"
+                          title="ADMIN STORE"
+                          signerName={lpbAdminAccount.name}
+                          accountId={lpbAdminAccount.id}
+                          accountUsername={lpbAdminAccount.username}
+                          date={lpbAdminStamp.date}
+                          time={lpbAdminStamp.time}
+                          colorScheme="blue"
+                          compact={true}
+                        />
+                      ) : (
+                        <span className="text-[7px] text-slate-400 italic select-none">
+                          ( Tanda Tangan )
+                        </span>
+                      )}
                     </div>
                     <div className="w-full pt-0.5 border-t border-dotted border-slate-400">
                       <div className="font-bold text-[8px] text-slate-900 truncate">
-                        ( ................................ )
+                        ( {lpbAdminAccount.name} )
                       </div>
-                      <div className="text-[7px] text-slate-500 font-medium">
-                        Pemeriksa Barang
-                      </div>
+                      {(lpbAdminAccount.username !== '-' || lpbAdminAccount.id !== '-') && (
+                        <div className="text-[6.5px] font-mono text-slate-600 truncate">
+                          {lpbAdminAccount.username !== '-' ? `@${lpbAdminAccount.username}` : ''}
+                          {lpbAdminAccount.username !== '-' && lpbAdminAccount.id !== '-'
+                            ? ' • '
+                            : ''}
+                          {lpbAdminAccount.id !== '-' ? `ID: ${lpbAdminAccount.id}` : ''}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </td>
 
-                {/* 3. Diterima Oleh (Kepala Gudang Manual) */}
-                <td className="p-1 text-center align-bottom h-16">
+                {/* 3. Disetujui Oleh (Kepala Store — TTD Digital berdasarkan ID Akun & Nama Akun) */}
+                <td className="p-1 text-center align-bottom h-20">
                   <div className="flex flex-col justify-between items-center h-full">
-                    <div className="flex-1 w-full flex items-center justify-center">
-                      <span className="text-[7px] text-slate-400 italic select-none">
-                        ( Tanda Tangan Basah )
-                      </span>
+                    <div className="flex-1 w-full flex items-center justify-center p-0.5">
+                      {showDigitalStamp && isLpbApproved ? (
+                        <DigitalAccStamp
+                          badge="TTD DIGITAL"
+                          title="ACC LPB - KA. STORE"
+                          signerName={lpbHeadAccount.name}
+                          accountId={lpbHeadAccount.id}
+                          accountUsername={lpbHeadAccount.username}
+                          date={lpbHeadStamp.date}
+                          time={lpbHeadStamp.time}
+                          colorScheme="emerald"
+                          compact={true}
+                        />
+                      ) : (
+                        <span className="text-[7px] text-slate-400 italic select-none">
+                          {isLpbApproved ? '( Tanda Tangan )' : '( Menunggu ACC Ka. Store )'}
+                        </span>
+                      )}
                     </div>
                     <div className="w-full pt-0.5 border-t border-dotted border-slate-400">
                       <div className="font-bold text-[8px] text-slate-900 truncate">
-                        ( {lpb.receivedByAdmin || 'Kepala Gudang AAP'} )
+                        ( {isLpbApproved ? lpbHeadAccount.name : '............................'} )
                       </div>
-                      <div className="text-[7px] text-slate-500 font-medium">Kepala Gudang</div>
+                      {isLpbApproved &&
+                        (lpbHeadAccount.username !== '-' || lpbHeadAccount.id !== '-') && (
+                          <div className="text-[6.5px] font-mono text-slate-600 truncate">
+                            {lpbHeadAccount.username !== '-' ? `@${lpbHeadAccount.username}` : ''}
+                            {lpbHeadAccount.username !== '-' && lpbHeadAccount.id !== '-'
+                              ? ' • '
+                              : ''}
+                            {lpbHeadAccount.id !== '-' ? `ID: ${lpbHeadAccount.id}` : ''}
+                          </div>
+                        )}
                     </div>
                   </div>
                 </td>
@@ -1102,10 +1303,9 @@ const SingleLpbBlock: React.FC<SingleLpbBlockProps> = ({
 
         {/* Paper Copies Footnote */}
         <div className="flex items-center justify-between text-[7.5px] font-semibold text-slate-800 mt-1 px-0.5">
-          <div className="flex items-center gap-2">
-            <span>Putih : Gudang</span>
+          <div className="flex items-center gap-3">
+            <span>Putih : Arsip Store</span>
             <span>Kuning : Purchasing</span>
-            <span className="text-slate-500 font-normal">Merah : Supplier</span>
           </div>
           <div className="text-[7px] text-slate-500 font-mono italic truncate">
             {paperCopyColorNote}
@@ -1123,18 +1323,26 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
   documentData,
   onClose,
 }) => {
-  const { companyProfile } = useInventory();
+  const { companyProfile, users } = useInventory();
   const [isExporting, setIsExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState<string | null>(null);
 
-  // Default layout:
-  // - Untuk LPB: 'landscape-side' (Ukuran A5 = Kertas A4 dibagi 2 Kanan & Kiri, Full Bawah)
-  // - Untuk SIV: 'landscape-single' atau 'landscape-side' (bisa dipilih bebas)
+  // Default layout sesuai ketentuan:
+  // - LPB: 'landscape-side' (Ukuran A5, Kertas A4 mode Landscape jadi 2 Kiri-Kanan: Arsip Store & Purchasing)
+  // - SIV: 'portrait-stack' (Ukuran A5, Kertas A4 mode Portrait jadi 2 Atas-Bawah: Arsip Store & Penerima Barang)
   const [layoutMode, setLayoutMode] = useState<
     'landscape-side' | 'landscape-single' | 'portrait-stack'
-  >('landscape-side');
+  >(documentData?.type === 'LPB' ? 'landscape-side' : 'portrait-stack');
 
-  // Default untuk SIV: Tampilkan TTD Digital Tanggal & Waktu Penyerahan serta ACC SIV Kepala Gudang
+  useEffect(() => {
+    if (documentData?.type === 'LPB') {
+      setLayoutMode('landscape-side');
+    } else if (documentData?.type === 'NPB') {
+      setLayoutMode('portrait-stack');
+    }
+  }, [documentData?.type, documentData?.doc]);
+
+  // Default: Tampilkan TTD Digital dengan Nama Akun, ID Akun, Tanggal & Waktu
   const [showDigitalStamp, setShowDigitalStamp] = useState(true);
 
   const printAreaRef = useRef<HTMLDivElement>(null);
@@ -1149,8 +1357,8 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
   const isLandscape = layoutMode === 'landscape-side' || layoutMode === 'landscape-single';
 
   const docTitle = isLPB
-    ? `LPB_A5_2in1_${lpb?.lpbNumber}`
-    : `NOTA_SIV_${npb?.voucherNumber}`;
+    ? `LPB_A5_KiriKanan_${lpb?.lpbNumber}`
+    : `SIV_A5_AtasBawah_${npb?.voucherNumber}`;
 
   const handlePrint = () => {
     if (printAreaRef.current) {
@@ -1171,10 +1379,10 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
 
     const suffix =
       layoutMode === 'landscape-side'
-        ? 'A5_KANAN_KIRI_FULL'
+        ? 'A5_A4_LANDSCAPE_KIRI_KANAN'
         : layoutMode === 'landscape-single'
-        ? 'LANDSCAPE'
-        : 'PORTRAIT_2IN1';
+        ? 'A4_LANDSCAPE'
+        : 'A5_A4_PORTRAIT_ATAS_BAWAH';
 
     const safeFilename = isLPB
       ? `LPB_${lpb?.lpbNumber.replace(/[^a-zA-Z0-9_-]/g, '_')}_${suffix}.pdf`
@@ -1186,7 +1394,7 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
       orientation: isLandscape ? 'landscape' : 'portrait',
       format: 'a4',
       marginMm: 4,
-      fitFullHeight: layoutMode === 'landscape-side',
+      fitFullHeight: layoutMode === 'landscape-side' || layoutMode === 'portrait-stack',
     });
 
     setIsExporting(false);
@@ -1194,8 +1402,8 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
     if (result.success) {
       setExportNotice(
         isLPB
-          ? 'File PDF LPB Ukuran A5 (A4 dibagi 2 Kanan & Kiri - Full Bawah) berhasil diekspor dan diunduh!'
-          : 'File PDF NOTA PENGAMBILAN BARANG (SIV) berhasil diekspor dan diunduh!'
+          ? 'File PDF LPB Ukuran A5 (Kertas A4 Landscape 2 Kiri-Kanan: Arsip Store & Purchasing) berhasil diunduh!'
+          : 'File PDF SIV Ukuran A5 (Kertas A4 Portrait 2 Atas-Bawah: Arsip Store & Penerima Barang) berhasil diunduh!'
       );
       setTimeout(() => setExportNotice(null), 4000);
     } else {
@@ -1290,6 +1498,20 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
     15
   );
 
+  const lpbAdminStamp = formatDigitalAccTimestamp(
+    lpb?.adminValidatedAt || lpb?.createdAt || lpb?.receivedDate,
+    lpb?.receivedDate,
+    10,
+    15
+  );
+
+  const lpbHeadStamp = formatDigitalAccTimestamp(
+    lpb?.approvedAt || lpb?.createdAt || lpb?.receivedDate,
+    lpb?.receivedDate,
+    13,
+    45
+  );
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
       <div className="print-modal-container relative w-full max-w-6xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-3 sm:my-6 max-h-[94vh] flex flex-col">
@@ -1305,29 +1527,27 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
               <span className="text-[10px] text-slate-300 hidden sm:block">
                 {companyProfile.companyName || 'PT. Abadi Agrosindo Persada'} &middot;{' '}
                 {isLPB
-                  ? 'Ukuran A5 × 2 (Kertas A4 dibagi 2 Kanan & Kiri — Full Bawah)'
-                  : 'Format Resmi Nota Pengambilan Barang (FR/AAP/G-STR/23/001)'}
+                  ? 'Ukuran A5, Kertas A4 Landscape jadi 2 Kiri-Kanan (Arsip Store & Purchasing)'
+                  : 'Ukuran A5, Kertas A4 Portrait jadi 2 Atas-Bawah (Arsip Store & Penerima Barang)'}
               </span>
             </div>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Toggle Stempel ACC Digital khusus SIV */}
-            {!isLPB && (
-              <button
-                type="button"
-                onClick={() => setShowDigitalStamp((prev) => !prev)}
-                className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                  showDigitalStamp
-                    ? 'bg-blue-600/20 border-blue-400 text-blue-200'
-                    : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                }`}
-                title="Tampilkan atau sembunyikan TTD Digital Tanggal & Waktu pada kolom tanda tangan SIV"
-              >
-                <Stamp className="w-3.5 h-3.5" />
-                <span>{showDigitalStamp ? 'TTD Digital: Aktif' : 'TTD Polos (Tanpa Jam)'}</span>
-              </button>
-            )}
+            {/* Toggle Stempel ACC Digital */}
+            <button
+              type="button"
+              onClick={() => setShowDigitalStamp((prev) => !prev)}
+              className={`px-2.5 py-1 rounded-lg border text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                showDigitalStamp
+                  ? 'bg-blue-600/20 border-blue-400 text-blue-200'
+                  : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+              }`}
+              title="Tampilkan atau sembunyikan TTD Digital (Nama Akun, ID Akun, Tanggal & Jam)"
+            >
+              <Stamp className="w-3.5 h-3.5" />
+              <span>{showDigitalStamp ? 'TTD Digital: Aktif' : 'TTD Polos (Tanpa Stempel)'}</span>
+            </button>
 
             {/* Layout Mode Switcher */}
             <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700 text-xs">
@@ -1339,10 +1559,23 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                     ? 'bg-emerald-600 text-white shadow-xs'
                     : 'text-slate-300 hover:text-white'
                 }`}
-                title="Ukuran A5 (Kertas A4 Landscape dibagi 2 Kanan & Kiri - Full Bawah)"
+                title="Ukuran A5 (Kertas A4 Landscape jadi 2 Kiri-Kanan)"
               >
                 <Columns2 className="w-3.5 h-3.5" />
-                <span>Ukuran A5 (A4 Jadi 2 Kanan-Kiri)</span>
+                <span>A5 Kiri-Kanan (A4 Landscape)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setLayoutMode('portrait-stack')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors flex items-center gap-1.5 ${
+                  layoutMode === 'portrait-stack'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-300 hover:text-white'
+                }`}
+                title="Ukuran A5 (Kertas A4 Portrait jadi 2 Atas-Bawah)"
+              >
+                <Rows2 className="w-3.5 h-3.5" />
+                <span>A5 Atas-Bawah (A4 Portrait)</span>
               </button>
               <button
                 type="button"
@@ -1355,20 +1588,7 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                 title="1 Tabel Lebar Penuh dalam 1 Lembar Landscape"
               >
                 <Maximize2 className="w-3.5 h-3.5" />
-                <span>1 Lembar Penuh (Landscape)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setLayoutMode('portrait-stack')}
-                className={`px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1.5 ${
-                  layoutMode === 'portrait-stack'
-                    ? 'bg-emerald-600 text-white font-semibold'
-                    : 'text-slate-300 hover:text-white'
-                }`}
-                title="2 Rangkap Atas-Bawah pada Kertas A4 Portrait"
-              >
-                <Rows2 className="w-3.5 h-3.5" />
-                <span>Atas-Bawah (Portrait)</span>
+                <span>1 Lembar Penuh</span>
               </button>
             </div>
 
@@ -1435,23 +1655,16 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
             <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
             <span>
               {isLPB ? (
-                layoutMode === 'landscape-side' ? (
-                  <>
-                    Format <strong>LPB Ukuran A5 (Kertas A4 dibagi 2 Kanan &amp; Kiri)</strong>:{' '}
-                    Tabel ditarik <strong>Full ke Bawah</strong> mengikuti tinggi kertas A5 (16 baris).
-                    Nama barang panjang otomatis diteruskan ke baris bawahnya dan menggeser nomor urut berikutnya.
-                  </>
-                ) : (
-                  <>
-                    Format <strong>LPB</strong>: Nama barang panjang otomatis diteruskan ke baris
-                    bawahnya dan menggeser nomor urut berikutnya.
-                  </>
-                )
+                <>
+                  Format Cetak PDF <strong>LPB</strong>: Ukuran <strong>A5</strong> pada Kertas{' '}
+                  <strong>A4 Mode Landscape jadi 2 Kiri-Kanan</strong> (Kiri:{' '}
+                  <strong>Arsip Store</strong> &amp; Kanan: <strong>Purchasing</strong>).
+                </>
               ) : (
                 <>
-                  Format <strong>NOTA PENGAMBILAN BARANG (STORE ISSUE VOUCHER)</strong> sesuai form
-                  resmi <strong>{companyProfile.sivDocCode || 'FR/AAP/G-STR/23/001'}</strong>{' '}
-                  (Kolom: No, Material Code, Nama Barang, Jumlah, Sat, Cost Center, GL Acc).
+                  Format Cetak PDF <strong>SIV</strong>: Ukuran <strong>A5</strong> pada Kertas{' '}
+                  <strong>A4 Mode Portrait jadi 2 Atas-Bawah</strong> (Atas:{' '}
+                  <strong>Arsip Store</strong> &amp; Bawah: <strong>Penerima Barang</strong>).
                 </>
               )}
             </span>
@@ -1459,10 +1672,10 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
 
           <span className="text-[11px] font-mono text-slate-500 hidden sm:inline shrink-0">
             {layoutMode === 'landscape-side'
-              ? '2 × A5 (148.5 × 210 mm) pada 1 A4 Landscape'
-              : isLandscape
-              ? 'A4 Landscape (297 × 210 mm)'
-              : 'A4 Portrait (210 × 297 mm)'}
+              ? '2 × A5 Kiri-Kanan pada 1 A4 Landscape (297 × 210 mm)'
+              : layoutMode === 'portrait-stack'
+              ? '2 × A5 Atas-Bawah pada 1 A4 Portrait (210 × 297 mm)'
+              : 'A4 Landscape (297 × 210 mm)'}
           </span>
         </div>
 
@@ -1475,23 +1688,29 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
               width: isLandscape ? '1080px' : '794px',
               minHeight:
                 layoutMode === 'landscape-side'
-                  ? '756px' // Rasio presisi A4 Landscape (289mm : 202mm) agar A5 Kanan-Kiri Full sampai bawah kertas
-                  : isLandscape
-                  ? '680px'
-                  : '1080px',
+                  ? '756px' // Rasio presisi A4 Landscape (2 × A5 Kiri-Kanan)
+                  : layoutMode === 'portrait-stack'
+                  ? '1115px' // Rasio presisi A4 Portrait (2 × A5 Atas-Bawah)
+                  : '680px',
             }}
           >
             {/* =================================================================== */}
-            {/* 1. NOTA PENGAMBILAN BARANG (SIV) — PERSIS SESUAI GAMBAR FISIK       */}
+            {/* 1. NOTA PENGAMBILAN BARANG (SIV)                                    */}
+            {/*    Default: Ukuran A5, Kertas A4 Mode Portrait jadi 2 Atas-Bawah    */}
+            {/*    (Atas: Arsip Store & Bawah: Penerima Barang)                     */}
             {/* =================================================================== */}
             {!isLPB && npb && (
               <div className="flex-1 flex flex-col h-full">
                 {layoutMode === 'landscape-side' ? (
                   <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2.5 flex-1 h-full">
-                    {/* KIRI: LEMBAR 1 (PUTIH : AKUNTING / ADMIN) */}
-                    <div className="p-2 bg-white min-w-0 flex flex-col h-full">
+                    {/* KIRI: LEMBAR 1 (ARSIP STORE) */}
+                    <div className="border border-slate-900 p-2 bg-white min-w-0 flex flex-col h-full">
                       <SingleNotaBlock
                         npb={npb}
+                        users={users}
+                        copyLabel="LEMBAR 1 (A5) : ARSIP STORE"
+                        copyBadgeColor="blue"
+                        paperCopyColorNote="Lembar 1 (A5): Arsip Store"
                         formatFullDate={formatFullDate}
                         reqApprovalStamp={reqApprovalStamp}
                         handoverStamp={handoverStamp}
@@ -1512,15 +1731,19 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                         className="text-[7.5px] font-mono font-bold uppercase tracking-widest text-slate-500"
                         style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
                       >
-                        POTONG DI SINI &mdash; PUTIH : AKUNTING (KIRI) &amp; KUNING : GUDANG (KANAN)
+                        GARIS POTONG A5 &mdash; KIRI : ARSIP STORE &amp; KANAN : PENERIMA BARANG
                       </span>
                       <Scissors className="w-3.5 h-3.5 text-slate-600 -rotate-90" />
                     </div>
 
-                    {/* KANAN: LEMBAR 2 (KUNING : GUDANG / PENERIMA) */}
-                    <div className="p-2 bg-white min-w-0 flex flex-col h-full">
+                    {/* KANAN: LEMBAR 2 (PENERIMA BARANG) */}
+                    <div className="border border-slate-900 p-2 bg-white min-w-0 flex flex-col h-full">
                       <SingleNotaBlock
                         npb={npb}
+                        users={users}
+                        copyLabel="LEMBAR 2 (A5) : PENERIMA BARANG"
+                        copyBadgeColor="emerald"
+                        paperCopyColorNote="Lembar 2 (A5): Penerima Barang"
                         formatFullDate={formatFullDate}
                         reqApprovalStamp={reqApprovalStamp}
                         handoverStamp={handoverStamp}
@@ -1535,9 +1758,13 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                     </div>
                   </div>
                 ) : layoutMode === 'landscape-single' ? (
-                  <div className="p-4 bg-white flex-1 flex flex-col h-full">
+                  <div className="border border-slate-900 p-4 bg-white flex-1 flex flex-col h-full">
                     <SingleNotaBlock
                       npb={npb}
+                      users={users}
+                      copyLabel="ARSIP STORE & PENERIMA BARANG"
+                      copyBadgeColor="blue"
+                      paperCopyColorNote="Lembar Resmi Store & Penerima Barang"
                       formatFullDate={formatFullDate}
                       reqApprovalStamp={reqApprovalStamp}
                       handoverStamp={handoverStamp}
@@ -1552,10 +1779,14 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                   </div>
                 ) : (
                   <div className="flex flex-col justify-between flex-1 h-full gap-2">
-                    {/* ATAS: LEMBAR 1 */}
-                    <div className="p-3 bg-white flex-1 flex flex-col">
+                    {/* ATAS (UKURAN A5): LEMBAR 1 — ARSIP STORE */}
+                    <div className="border border-slate-900 p-2.5 bg-white flex-1 flex flex-col">
                       <SingleNotaBlock
                         npb={npb}
+                        users={users}
+                        copyLabel="LEMBAR 1 (A5) : ARSIP STORE"
+                        copyBadgeColor="blue"
+                        paperCopyColorNote="Lembar 1 (Atas - A5): Arsip Store"
                         formatFullDate={formatFullDate}
                         reqApprovalStamp={reqApprovalStamp}
                         handoverStamp={handoverStamp}
@@ -1569,19 +1800,25 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                       />
                     </div>
 
-                    {/* Garis Potong Tengah */}
-                    <div className="py-0.5 flex items-center justify-center text-slate-500 text-[9px] font-mono border-t border-b border-dashed border-slate-400 bg-slate-50 select-none">
+                    {/* Garis Potong Tengah (Pembagi A4 Portrait menjadi 2 Lembar A5 Atas-Bawah) */}
+                    <div className="py-0.5 flex items-center justify-center text-slate-500 text-[8.5px] font-mono border-t border-b border-dashed border-slate-400 bg-slate-50 select-none">
                       <div className="flex items-center gap-2 font-bold uppercase tracking-widest text-slate-600">
                         <Scissors className="w-3 h-3 text-slate-600" />
-                        <span>POTONG DI SINI &mdash; PUTIH : AKUNTING &amp; KUNING : GUDANG</span>
+                        <span>
+                          GARIS POTONG A5 &mdash; ATAS : ARSIP STORE &amp; BAWAH : PENERIMA BARANG
+                        </span>
                         <Scissors className="w-3 h-3 text-slate-600" />
                       </div>
                     </div>
 
-                    {/* BAWAH: LEMBAR 2 */}
-                    <div className="p-3 bg-white flex-1 flex flex-col">
+                    {/* BAWAH (UKURAN A5): LEMBAR 2 — PENERIMA BARANG */}
+                    <div className="border border-slate-900 p-2.5 bg-white flex-1 flex flex-col">
                       <SingleNotaBlock
                         npb={npb}
+                        users={users}
+                        copyLabel="LEMBAR 2 (A5) : PENERIMA BARANG"
+                        copyBadgeColor="emerald"
+                        paperCopyColorNote="Lembar 2 (Bawah - A5): Penerima Barang"
                         formatFullDate={formatFullDate}
                         reqApprovalStamp={reqApprovalStamp}
                         handoverStamp={handoverStamp}
@@ -1600,20 +1837,26 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
             )}
 
             {/* =================================================================== */}
-            {/* 2. LAPORAN PENERIMAAN BARANG (LPB) — UKURAN A5 (A4 JADI 2), FULL BAWAH */}
+            {/* 2. LAPORAN PENERIMAAN BARANG (LPB)                                  */}
+            {/*    Default: Ukuran A5, Kertas A4 Mode Landscape jadi 2 Kiri-Kanan   */}
+            {/*    (Kiri: Arsip Store & Kanan: Purchasing)                          */}
             {/* =================================================================== */}
             {isLPB && lpb && (
               <div className="flex-1 flex flex-col h-full">
                 {layoutMode === 'landscape-side' ? (
                   <div className="grid grid-cols-[1fr_auto_1fr] items-stretch gap-2 flex-1 h-full">
-                    {/* KIRI (UKURAN A5 FULL BAWAH): LEMBAR 1 ARSIP GUDANG / ADMIN */}
+                    {/* KIRI (UKURAN A5 FULL BAWAH): LEMBAR 1 — ARSIP STORE */}
                     <div className="border border-slate-900 p-2.5 bg-white min-w-0 flex flex-col h-full">
                       <SingleLpbBlock
                         lpb={lpb}
-                        copyLabel="LEMBAR 1 (A5) : ARSIP GUDANG / ADMIN"
+                        users={users}
+                        copyLabel="LEMBAR 1 (A5) : ARSIP STORE"
                         copyBadgeColor="blue"
-                        paperCopyColorNote="Lembar 1 (Kiri - A5): Arsip Pembukuan & Kontrol Gudang"
+                        paperCopyColorNote="Lembar 1 (Kiri - A5): Arsip Store"
                         formatShortDate={formatShortDate}
+                        lpbAdminStamp={lpbAdminStamp}
+                        lpbHeadStamp={lpbHeadStamp}
+                        showDigitalStamp={showDigitalStamp}
                         isCompact={true}
                         isSideBySide={true}
                         companyName={companyProfile.companyName || 'PT. Abadi Agrosindo Persada'}
@@ -1626,26 +1869,30 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                       />
                     </div>
 
-                    {/* GARIS POTONG VERTIKAL TENGAH (PEMBAGI A4 MENJADI 2 LEMBAR A5) */}
+                    {/* GARIS POTONG VERTIKAL TENGAH (PEMBAGI A4 LANDSCAPE MENJADI 2 LEMBAR A5 KIRI-KANAN) */}
                     <div className="flex flex-col items-center justify-between py-2 px-0.5 border-l border-r border-dashed border-slate-400 bg-slate-50/70 select-none text-slate-500">
                       <Scissors className="w-3.5 h-3.5 text-slate-600 rotate-90" />
                       <span
                         className="text-[7.5px] font-mono font-bold uppercase tracking-widest text-slate-600"
                         style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
                       >
-                        GARIS POTONG A5 &mdash; KIRI : GUDANG &amp; KANAN : PURCHASING / SUPPLIER
+                        GARIS POTONG A5 &mdash; KIRI : ARSIP STORE &amp; KANAN : PURCHASING
                       </span>
                       <Scissors className="w-3.5 h-3.5 text-slate-600 -rotate-90" />
                     </div>
 
-                    {/* KANAN (UKURAN A5 FULL BAWAH): LEMBAR 2 ARSIP PURCHASING / SUPPLIER */}
+                    {/* KANAN (UKURAN A5 FULL BAWAH): LEMBAR 2 — PURCHASING */}
                     <div className="border border-slate-900 p-2.5 bg-white min-w-0 flex flex-col h-full">
                       <SingleLpbBlock
                         lpb={lpb}
-                        copyLabel="LEMBAR 2 (A5) : ARSIP PURCHASING / SUPPLIER"
+                        users={users}
+                        copyLabel="LEMBAR 2 (A5) : PURCHASING"
                         copyBadgeColor="emerald"
-                        paperCopyColorNote="Lembar 2 (Kanan - A5): Tembusan Purchasing & Supplier"
+                        paperCopyColorNote="Lembar 2 (Kanan - A5): Purchasing"
                         formatShortDate={formatShortDate}
+                        lpbAdminStamp={lpbAdminStamp}
+                        lpbHeadStamp={lpbHeadStamp}
+                        showDigitalStamp={showDigitalStamp}
                         isCompact={true}
                         isSideBySide={true}
                         companyName={companyProfile.companyName || 'PT. Abadi Agrosindo Persada'}
@@ -1662,10 +1909,14 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                   <div className="border border-slate-900 p-4 bg-white flex-1 flex flex-col h-full">
                     <SingleLpbBlock
                       lpb={lpb}
-                      copyLabel="ARSIP RESMI GUDANG & PURCHASING (A4 LANDSCAPE)"
+                      users={users}
+                      copyLabel="ARSIP STORE & PURCHASING (A4 LANDSCAPE)"
                       copyBadgeColor="blue"
-                      paperCopyColorNote="1 Lembar A4 Landscape Resmi Gudang PT. Abadi Agrosindo Persada"
+                      paperCopyColorNote="1 Lembar A4 Landscape Resmi Store PT. Abadi Agrosindo Persada"
                       formatShortDate={formatShortDate}
+                      lpbAdminStamp={lpbAdminStamp}
+                      lpbHeadStamp={lpbHeadStamp}
+                      showDigitalStamp={showDigitalStamp}
                       isCompact={false}
                       isSideBySide={false}
                       companyName={companyProfile.companyName || 'PT. Abadi Agrosindo Persada'}
@@ -1679,14 +1930,18 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                   </div>
                 ) : (
                   <div className="flex flex-col justify-between flex-1 h-full gap-2">
-                    {/* LEMBAR 1: ARSIP GUDANG */}
+                    {/* LEMBAR 1: ARSIP STORE */}
                     <div className="border border-slate-900 p-2.5 sm:p-3 bg-white flex-1 flex flex-col">
                       <SingleLpbBlock
                         lpb={lpb}
-                        copyLabel="LEMBAR 1 : ARSIP GUDANG"
+                        users={users}
+                        copyLabel="LEMBAR 1 (A5) : ARSIP STORE"
                         copyBadgeColor="blue"
-                        paperCopyColorNote="Lembar 1: Arsip Pembukuan & Kontrol Gudang"
+                        paperCopyColorNote="Lembar 1 (Atas - A5): Arsip Store"
                         formatShortDate={formatShortDate}
+                        lpbAdminStamp={lpbAdminStamp}
+                        lpbHeadStamp={lpbHeadStamp}
+                        showDigitalStamp={showDigitalStamp}
                         isCompact={true}
                         companyName={companyProfile.companyName || 'PT. Abadi Agrosindo Persada'}
                         companyCity={companyProfile.city || 'Sidoarjo'}
@@ -1703,20 +1958,24 @@ export const PrintDocumentModal: React.FC<PrintDocumentModalProps> = ({
                       <div className="flex items-center gap-2 font-bold uppercase tracking-widest text-slate-600">
                         <Scissors className="w-3 h-3 text-slate-600" />
                         <span>
-                          POTONG DI SINI &mdash; PISAHKAN ARSIP GUDANG DAN PURCHASING / SUPPLIER
+                          GARIS POTONG A5 &mdash; ATAS : ARSIP STORE &amp; BAWAH : PURCHASING
                         </span>
                         <Scissors className="w-3 h-3 text-slate-600" />
                       </div>
                     </div>
 
-                    {/* LEMBAR 2: ARSIP PURCHASING / SUPPLIER */}
+                    {/* LEMBAR 2: PURCHASING */}
                     <div className="border border-slate-900 p-2.5 sm:p-3 bg-white flex-1 flex flex-col">
                       <SingleLpbBlock
                         lpb={lpb}
-                        copyLabel="LEMBAR 2 : ARSIP PURCHASING / SUPPLIER"
+                        users={users}
+                        copyLabel="LEMBAR 2 (A5) : PURCHASING"
                         copyBadgeColor="emerald"
-                        paperCopyColorNote="Lembar 2: Tembusan Purchasing & Dokumen Vendor"
+                        paperCopyColorNote="Lembar 2 (Bawah - A5): Purchasing"
                         formatShortDate={formatShortDate}
+                        lpbAdminStamp={lpbAdminStamp}
+                        lpbHeadStamp={lpbHeadStamp}
+                        showDigitalStamp={showDigitalStamp}
                         isCompact={true}
                         companyName={companyProfile.companyName || 'PT. Abadi Agrosindo Persada'}
                         companyCity={companyProfile.city || 'Sidoarjo'}

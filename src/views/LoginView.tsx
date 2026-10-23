@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
+import { useTheme } from '../context/ThemeContext';
 import {
   Boxes,
   Lock,
@@ -9,24 +10,56 @@ import {
   ShieldCheck,
   ArrowRight,
   AlertCircle,
-  KeyRound,
+  Copy,
+  Check,
+  Share2,
+  Sun,
+  Moon,
 } from 'lucide-react';
 
 export const LoginView: React.FC = () => {
-  const { login, users } = useInventory();
+  const { login, companyProfile } = useInventory();
+  const { theme, toggleTheme } = useTheme();
 
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [copiedLoginUrl, setCopiedLoginUrl] = useState(false);
+  const [publicDeployUrl, setPublicDeployUrl] = useState<string>(
+    typeof window !== 'undefined' ? window.location.origin : ''
+  );
+
+  React.useEffect(() => {
+    fetch('/api/public-url')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data?.publicUrl) {
+          setPublicDeployUrl(data.publicUrl);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const loginShareUrl = publicDeployUrl || (typeof window !== 'undefined' ? window.location.origin : '');
+
+  const handleCopyLoginLink = async () => {
+    try {
+      await navigator.clipboard.writeText(loginShareUrl);
+      setCopiedLoginUrl(true);
+      setTimeout(() => setCopiedLoginUrl(false), 2500);
+    } catch {
+      // ignore
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
     if (!username.trim() || !password) {
-      setErrorMsg('Mohon masukkan username dan password Anda.');
+      setErrorMsg('Mohon masukkan username dan password akun Anda.');
       return;
     }
 
@@ -37,43 +70,99 @@ export const LoginView: React.FC = () => {
       if (!result.success && result.error) {
         setErrorMsg(result.error);
       }
-    }, 250);
+    }, 200);
   };
 
-  const handleQuickFill = (u: string, p: string) => {
-    setUsername(u);
-    setPassword(p);
-    setErrorMsg('');
-  };
-
-  const activeUsers = users.filter((u) => u.isActive !== false);
+  const isDark = theme === 'dark';
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8 text-slate-100 font-sans relative overflow-hidden">
+    <div
+      className={`min-h-screen flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans relative overflow-hidden transition-colors ${
+        isDark ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
+      }`}
+    >
+      {/* Top-Right Theme Switcher Button */}
+      <div className="absolute top-4 right-4 z-20">
+        <button
+          type="button"
+          onClick={toggleTheme}
+          className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl border text-xs font-semibold shadow-sm transition-colors cursor-pointer ${
+            isDark
+              ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-200'
+              : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700'
+          }`}
+          title="Ubah Tema Tampilan (Terang / Gelap)"
+        >
+          {isDark ? (
+            <>
+              <Sun className="w-4 h-4 text-amber-400" />
+              <span>Mode Terang</span>
+            </>
+          ) : (
+            <>
+              <Moon className="w-4 h-4 text-sky-600" />
+              <span>Mode Gelap</span>
+            </>
+          )}
+        </button>
+      </div>
+
       {/* Background Subtle Gradient & Grid Pattern */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 -z-10" />
-      <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b0a_1px,transparent_1px),linear-gradient(to_bottom,#1e293b0a_1px,transparent_1px)] bg-[size:32px_32px] -z-10" />
+      {isDark && (
+        <>
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-slate-950 to-slate-950 -z-10" />
+          <div className="absolute inset-0 bg-[linear-gradient(to_right,#1e293b0a_1px,transparent_1px),linear-gradient(to_bottom,#1e293b0a_1px,transparent_1px)] bg-[size:32px_32px] -z-10" />
+        </>
+      )}
 
       {/* Main Container */}
-      <div className="sm:mx-auto sm:w-full sm:max-w-lg px-4">
+      <div className="sm:mx-auto sm:w-full sm:max-w-md px-4">
         {/* Brand Header */}
         <div className="text-center">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 mb-4 shadow-lg shadow-emerald-950/40">
-            <Boxes className="w-8 h-8" />
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">
-            GudangPresisi
+          {companyProfile?.logoUrl ? (
+            <img
+              src={companyProfile.logoUrl}
+              alt="Logo Perusahaan"
+              className={`w-14 h-14 object-contain rounded-2xl p-1.5 mx-auto mb-4 border ${
+                isDark ? 'bg-white/10 border-slate-700' : 'bg-white border-slate-200 shadow-xs'
+              }`}
+            />
+          ) : (
+            <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-500 mb-4 shadow-lg shadow-emerald-950/20">
+              <Boxes className="w-8 h-8" />
+            </div>
+          )}
+          <h1
+            className={`text-2xl font-bold tracking-tight ${
+              isDark ? 'text-white' : 'text-slate-900'
+            }`}
+          >
+            {companyProfile?.appName || 'GudangPresisi'}
           </h1>
-          <p className="text-xs uppercase tracking-widest text-emerald-400 font-mono mt-1">
-            Sistem Inventaris & Logistik Gudang
+          <p
+            className={`text-xs uppercase tracking-widest font-mono mt-1 font-bold ${
+              isDark ? 'text-emerald-400' : 'text-emerald-700'
+            }`}
+          >
+            {companyProfile?.companyName || 'PT. Abadi Agrosindo Persada'}
           </p>
-          <p className="text-xs text-slate-400 mt-2 max-w-sm mx-auto">
-            Silakan masuk menggunakan akun Admin Gudang, Kepala Gudang, atau User Pemohon.
+          <p
+            className={`text-xs mt-2 max-w-sm mx-auto ${
+              isDark ? 'text-slate-400' : 'text-slate-600'
+            }`}
+          >
+            Silakan login menggunakan Username dan Password akun masing-masing.
           </p>
         </div>
 
-        {/* Card Box */}
-        <div className="mt-8 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-sm">
+        {/* Login Card Box (Clean - No Quick Login) */}
+        <div
+          className={`mt-8 rounded-2xl p-6 sm:p-8 shadow-2xl backdrop-blur-sm border ${
+            isDark
+              ? 'bg-slate-900/90 border-slate-800'
+              : 'bg-white border-slate-200'
+          }`}
+        >
           <form onSubmit={handleSubmit} className="space-y-4 text-xs">
             {errorMsg && (
               <div className="p-3 bg-red-950/70 border border-red-500/40 rounded-xl text-red-300 text-xs flex items-start gap-2.5">
@@ -84,7 +173,11 @@ export const LoginView: React.FC = () => {
 
             {/* Username Input */}
             <div>
-              <label className="block font-medium text-slate-300 mb-1.5">
+              <label
+                className={`block font-medium mb-1.5 ${
+                  isDark ? 'text-slate-300' : 'text-slate-700'
+                }`}
+              >
                 Username Pengguna
               </label>
               <div className="relative">
@@ -100,15 +193,23 @@ export const LoginView: React.FC = () => {
                     setUsername(e.target.value);
                     if (errorMsg) setErrorMsg('');
                   }}
-                  placeholder="Contoh: kepala / admin / budi / siti"
-                  className="w-full pl-9 pr-3 py-2.5 bg-slate-950/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-hidden transition-colors"
+                  placeholder="Masukkan username akun Anda"
+                  className={`w-full pl-9 pr-3 py-2.5 border rounded-xl placeholder-slate-500 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-hidden transition-colors ${
+                    isDark
+                      ? 'bg-slate-950/80 border-slate-700 text-white'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
                 />
               </div>
             </div>
 
             {/* Password Input */}
             <div>
-              <label className="block font-medium text-slate-300 mb-1.5">
+              <label
+                className={`block font-medium mb-1.5 ${
+                  isDark ? 'text-slate-300' : 'text-slate-700'
+                }`}
+              >
                 Kata Sandi (Password)
               </label>
               <div className="relative">
@@ -123,8 +224,12 @@ export const LoginView: React.FC = () => {
                     setPassword(e.target.value);
                     if (errorMsg) setErrorMsg('');
                   }}
-                  placeholder="Masukkan password"
-                  className="w-full pl-9 pr-10 py-2.5 bg-slate-950/80 border border-slate-700 rounded-xl text-white placeholder-slate-500 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-hidden transition-colors font-mono"
+                  placeholder="Masukkan password Anda"
+                  className={`w-full pl-9 pr-10 py-2.5 border rounded-xl placeholder-slate-500 focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 focus:outline-hidden transition-colors font-mono ${
+                    isDark
+                      ? 'bg-slate-950/80 border-slate-700 text-white'
+                      : 'bg-slate-50 border-slate-300 text-slate-900'
+                  }`}
                 />
                 <button
                   type="button"
@@ -142,76 +247,49 @@ export const LoginView: React.FC = () => {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors shadow-lg shadow-emerald-900/30 disabled:opacity-50"
+                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 rounded-xl transition-colors shadow-lg shadow-emerald-900/20 disabled:opacity-50 cursor-pointer"
               >
-                <span>{isLoading ? 'Memverifikasi...' : 'Masuk ke Sistem'}</span>
+                <span>{isLoading ? 'Memverifikasi Akun...' : 'Masuk ke Sistem'}</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </form>
 
-          {/* Quick Demo Helper Credentials */}
-          <div className="mt-6 pt-5 border-t border-slate-800">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
-              <KeyRound className="w-3.5 h-3.5 text-emerald-400" />
-              <span>Akun Demo Cepat (Klik untuk Isi Otomatis)</span>
+          {/* Share Login Link Helper */}
+          <div
+            className={`mt-6 pt-4 border-t flex items-center justify-between gap-2 text-[11px] ${
+              isDark ? 'border-slate-800/80' : 'border-slate-200'
+            }`}
+          >
+            <div
+              className={`flex items-center gap-1.5 truncate ${
+                isDark ? 'text-slate-400' : 'text-slate-600'
+              }`}
+            >
+              <Share2 className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
+              <span className="truncate">Link Login Sistem:</span>
             </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-              {activeUsers.map((u) => {
-                const isAdmin = u.role === 'admin';
-                const isKepala = u.role === 'kepala_gudang';
-
-                return (
-                  <button
-                    key={u.id}
-                    type="button"
-                    onClick={() => handleQuickFill(u.username, u.password)}
-                    className={`p-2.5 bg-slate-950/90 border rounded-xl text-left transition-colors group ${
-                      isKepala
-                        ? 'border-blue-500/40 hover:border-blue-400 bg-blue-950/20'
-                        : isAdmin
-                        ? 'border-emerald-500/30 hover:border-emerald-400'
-                        : 'border-slate-800 hover:border-amber-500/50'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1">
-                      <span
-                        className={`font-semibold text-white transition-colors ${
-                          isKepala
-                            ? 'group-hover:text-blue-400'
-                            : isAdmin
-                            ? 'group-hover:text-emerald-400'
-                            : 'group-hover:text-amber-400'
-                        }`}
-                      >
-                        {u.username}
-                      </span>
-                      <span
-                        className={`text-[9px] px-1.5 py-0.2 rounded font-mono font-bold ${
-                          isKepala
-                            ? 'bg-blue-950 text-blue-300 border border-blue-500/40'
-                            : isAdmin
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-slate-800 text-slate-300'
-                        }`}
-                      >
-                        {isKepala ? 'KEPALA GUDANG' : isAdmin ? 'ADMIN GUDANG' : 'PEMOHON'}
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-slate-300 font-medium truncate mt-0.5">
-                      {u.name}
-                    </div>
-                    <div className="text-[9px] text-slate-500 truncate">
-                      {u.department}
-                    </div>
-                    <div className="text-[9px] font-mono text-slate-500 mt-1">
-                      Pass: {u.password}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
+            <button
+              type="button"
+              onClick={handleCopyLoginLink}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border font-semibold shrink-0 transition-colors cursor-pointer ${
+                isDark
+                  ? 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
+                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border-emerald-200'
+              }`}
+            >
+              {copiedLoginUrl ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  <span>Link Login Tersalin</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Salin Link Login</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
 

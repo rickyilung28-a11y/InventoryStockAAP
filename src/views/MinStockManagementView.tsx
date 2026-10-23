@@ -1,7 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useInventory } from '../context/InventoryContext';
-import { StockItem, MinStockProposal } from '../types/inventory';
+import {
+  StockItem,
+  MinStockProposal,
+  getEffectivePermissions,
+} from '../types/inventory';
 import {
   ShieldAlert,
   AlertTriangle,
@@ -46,8 +50,9 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
     nearMinStockItems,
   } = useInventory();
 
-  const isAdmin = currentUser?.role === 'admin';
-  const isKepalaGudang = currentUser?.role === 'kepala_gudang';
+  const perms = getEffectivePermissions(currentUser);
+  const isAdmin = perms.canVerifyMinStock;
+  const isKepalaGudang = perms.canApproveMinStockSystem;
   const isRequesterUser = currentUser?.role === 'user';
 
   // Navigation tabs: 'monitor' (Table & Alerts) vs 'proposals' (Proposals & 3-Step Verification/Approval)
@@ -268,7 +273,7 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
       [],
       [
         'No',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Kategori',
         'Lokasi Rak',
@@ -314,7 +319,7 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
         'No',
         'No. Pengajuan',
         'Tanggal Pengajuan',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Min Stok Lama',
         'Usulan Pemohon',
@@ -419,7 +424,7 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
                 Total Master Barang
               </span>
               <span className="text-xl font-black text-slate-900 font-mono">
-                {stockItems.length} SKU
+                {stockItems.length} Material Code
               </span>
             </div>
             <div className="w-9 h-9 rounded-lg bg-white border border-slate-200 flex items-center justify-center text-slate-700 shadow-2xs">
@@ -642,7 +647,7 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Cari SKU, nama barang, rak..."
+                  placeholder="Cari Material Code, nama barang, rak..."
                   className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:bg-white focus:outline-hidden focus:ring-1 focus:ring-slate-900"
                 />
               </div>
@@ -654,7 +659,7 @@ export const MinStockManagementView: React.FC<MinStockManagementViewProps> = () 
             <table className="w-full text-xs text-left">
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 uppercase text-[10.5px]">
                 <tr>
-                  <th className="px-4 py-3">Barang &amp; SKU</th>
+                  <th className="px-4 py-3">Barang &amp; Material Code</th>
                   <th className="px-4 py-3">Kategori &amp; Rak</th>
                   <th className="px-4 py-3 text-right">Stok Fisik Saat Ini</th>
                   <th className="px-4 py-3 text-right">Batas Stok Minimal Sistem</th>

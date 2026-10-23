@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { InventoryProvider, useInventory } from './context/InventoryContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { Navbar } from './components/Navbar';
 import { ToastNotification } from './components/ToastNotification';
 import { NotificationDrawer } from './components/NotificationDrawer';
@@ -13,6 +14,7 @@ import { ApprovalModal } from './components/ApprovalModal';
 import { CreateLPBModal } from './components/CreateLPBModal';
 import { CreateIssueVoucherModal } from './components/CreateIssueVoucherModal';
 import { EditIssueVoucherModal } from './components/EditIssueVoucherModal';
+import { BarcodeScannerLookupModal } from './components/BarcodeScannerLookupModal';
 
 import { LoginView } from './views/LoginView';
 import { DashboardView } from './views/DashboardView';
@@ -26,12 +28,23 @@ import { StorageLocationsView } from './views/StorageLocationsView';
 import { CompanySettingsView } from './views/CompanySettingsView';
 import { MinStockManagementView } from './views/MinStockManagementView';
 import { SystemActivityLogView } from './views/SystemActivityLogView';
-import { IssueVoucherDocument } from './types/inventory';
-import { BellRing, Users } from 'lucide-react';
+import { SuperuserDatabaseView } from './views/SuperuserDatabaseView';
+import { StockOpnameView } from './views/StockOpnameView';
+import { PublicAccessModal } from './components/PublicAccessModal';
+import { ResetAllModal } from './components/ResetAllModal';
+import {
+  IssueVoucherDocument,
+  getEffectivePermissions,
+  getRoleLabel,
+  getRoleShortBadge,
+} from './types/inventory';
+import { downloadSqlBackupFile } from './utils/sqlAndExcelExport';
+import { Users, Share2, Database, Lock, ScanBarcode, Download, Trash2 } from 'lucide-react';
 
 function InventoryAppContent() {
   const {
     currentUser,
+    roleDefinitions,
     users,
     login,
     logout,
@@ -39,6 +52,16 @@ function InventoryAppContent() {
     lpbDocuments,
     issueVouchers,
     stockMovements,
+    minStockProposals,
+    stockOpnameSessions,
+    activeStockOpname,
+    isStockLockedForOpname,
+    locationTransferRequests,
+    costCenters,
+    glAccounts,
+    storageLocations,
+    companyProfile,
+    activityLogs,
     notifications,
     activeToast,
     dismissToast,
@@ -55,9 +78,24 @@ function InventoryAppContent() {
     openPrintPreview,
     closePrintPreview,
     resetToDefaultData,
+    resetAllTransactionsAndStock,
   } = useInventory();
 
-  // If user is not logged in, show clean Login View
+  // Active navigation tab
+  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [ledgerSkuFilter, setLedgerSkuFilter] = useState<string>('');
+
+  // Modals state
+  const [isCreateLPBOpen, setIsCreateLPBOpen] = useState(false);
+  const [isCreateVoucherOpen, setIsCreateVoucherOpen] = useState(false);
+  const [voucherToEdit, setVoucherToEdit] = useState<IssueVoucherDocument | null>(null);
+  const [voucherToApprove, setVoucherToApprove] = useState<IssueVoucherDocument | null>(null);
+  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
+  const [isPublicAccessModalOpen, setIsPublicAccessModalOpen] = useState(false);
+  const [isBarcodeScannerOpen, setIsBarcodeScannerOpen] = useState(false);
+  const [isResetAllModalOpen, setIsResetAllModalOpen] = useState(false);
+
+  // If user is not logged in, always display LoginView first
   if (!currentUser) {
     return (
       <>
@@ -70,32 +108,23 @@ function InventoryAppContent() {
     );
   }
 
-  // Active navigation tab
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
-  const [ledgerSkuFilter, setLedgerSkuFilter] = useState<string>('');
+  const perms = getEffectivePermissions(currentUser);
 
-  // Modals state
-  const [isCreateLPBOpen, setIsCreateLPBOpen] = useState(false);
-  const [isCreateVoucherOpen, setIsCreateVoucherOpen] = useState(false);
-  const [voucherToEdit, setVoucherToEdit] = useState<IssueVoucherDocument | null>(null);
-  const [voucherToApprove, setVoucherToApprove] = useState<IssueVoucherDocument | null>(null);
-  const [isNotificationDrawerOpen, setIsNotificationDrawerOpen] = useState(false);
-
-  // User pemohon SIV hanya dapat melihat SIV yang diterbitkan oleh dirinya sendiri
-  const visibleIssueVouchers =
-    currentUser.role === 'user'
-      ? issueVouchers.filter(
-          (v) =>
-            v.userId === currentUser.id ||
-            v.requestedBy.trim().toLowerCase() === currentUser.name.trim().toLowerCase()
-        )
-      : issueVouchers;
+  // User tanpa hak canViewAllSIV hanya dapat melihat SIV yang diterbitkan oleh dirinya sendiri
+  const visibleIssueVouchers = perms.canViewAllSIV
+    ? issueVouchers
+    : issueVouchers.filter(
+        (v) =>
+          v.userId === currentUser.id ||
+          v.requestedBy.trim().toLowerCase() === currentUser.name.trim().toLowerCase()
+      );
 
   const pendingApprovalsCount = visibleIssueVouchers.filter(
     (v) => v.status === 'PENDING' || v.status === 'APPROVED'
   ).length;
 
   const handleNavigateToLedgerItem = (sku: string) => {
+    if (!perms.canAccessStockMovement) return;
     setLedgerSkuFilter(sku);
     setCurrentTab('ledger');
   };
@@ -130,49 +159,32 @@ function InventoryAppContent() {
     }
   };
 
-  // Quick Simulation Helper for Real-Time Approval
-  const handleQuickSimulateApproval = () => {
-    const firstPending = issueVouchers.find((v) => v.status === 'PENDING');
-    const firstApproved = issueVouchers.find((v) => v.status === 'APPROVED');
-    if (firstPending) {
-      approveIssueVoucher(firstPending.id, {
-        warehouseHeadName: 'Suryadi (Kepala Gudang)',
-        approverAdminName: currentUser.name,
-        notes: 'Simulasi ACC SIV Kepala Gudang: Disetujui untuk proses pengeluaran.',
-      });
-    } else if (firstApproved) {
-      completeIssueVoucherHandover(firstApproved.id, {
-        handoverOfficer: firstApproved.approvedByAdmin || 'Hendra Gunawan',
-        recipientName: firstApproved.requestedBy,
-        notes: 'Simulasi Penyerahan & Scan Barcode selesai.',
-        validatedItems: firstApproved.items.map((i) => ({
-          itemId: i.itemId,
-          issuedQty: i.requestedQty,
-          isCancelled: false,
-          barcodeScanned: true,
-        })),
-      });
-    } else {
-      const res = createIssueVoucher({
-        purpose: 'Simulasi Kebutuhan Mendesak Sparepart Maintenance',
-        department: 'Dept. Pemeliharaan & Workshop',
-        notes: 'Dibuat untuk demonstrasi notifikasi real-time.',
-        items: [{ itemId: stockItems[0].id, requestedQty: 1 }],
-      });
-      if (res.success && res.voucher) {
-        setTimeout(() => {
-          approveIssueVoucher(res.voucher!.id, {
-            warehouseHeadName: 'Suryadi (Kepala Gudang)',
-            approverAdminName: 'Hendra Gunawan',
-            notes: 'ACC SIV Kepala Gudang selesai.',
-          });
-        }, 600);
-      }
-    }
+  const handleQuickSqlBackup = () => {
+    downloadSqlBackupFile({
+      roleDefinitions,
+      users,
+      stockItems,
+      lpbDocuments,
+      issueVouchers,
+      stockMovements,
+      minStockProposals,
+      stockOpnameSessions,
+      locationTransferRequests,
+      costCenters,
+      glAccounts,
+      storageLocations,
+      companyProfile,
+      activityLogs,
+      notifications,
+    });
   };
 
+  const isSuperUser = currentUser.role === 'superuser';
+  const canBackupSql =
+    isSuperUser || currentUser.role === 'kepala_gudang' || currentUser.role === 'admin';
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans">
+    <div className="min-h-dvh w-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans overflow-x-hidden transition-colors">
       {/* Top Navigation */}
       <Navbar
         currentTab={currentTab}
@@ -186,98 +198,130 @@ function InventoryAppContent() {
         onLogout={logout}
         notifications={notifications}
         onOpenNotifications={() => setIsNotificationDrawerOpen(true)}
-        onResetData={resetToDefaultData}
+        onResetData={() => setIsResetAllModalOpen(true)}
         pendingApprovalsCount={pendingApprovalsCount}
+        onSelectSearchItem={perms.canAccessStockMovement ? handleNavigateToLedgerItem : undefined}
+        onSelectSearchVoucher={(v) => setVoucherToApprove(v)}
+        onOpenBarcodeScanner={() => setIsBarcodeScannerOpen(true)}
       />
 
-      {/* Real-time interactive simulation guidance bar */}
-      <div className="bg-slate-900 border-b border-slate-800 text-slate-200 text-xs py-2 px-4 no-print">
-        <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-            <span className="text-slate-300">
-              Pengguna Aktif: <strong className="text-white">{currentUser.name}</strong> (@{currentUser.username}) &middot;{' '}
+      {/* Global Stock Opname Lock Banner */}
+      {isStockLockedForOpname && activeStockOpname && (
+        <div className="w-full bg-amber-500 text-slate-950 px-3 sm:px-5 lg:px-8 py-2 border-b border-amber-600 no-print">
+          <div className="w-full max-w-[1920px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 font-bold">
+              <Lock className="w-4 h-4 shrink-0" />
+              <span>
+                PERHATIAN: Stok Store sedang TER-LOCK karena sesi Stock Opname{' '}
+                <strong className="font-mono underline">{activeStockOpname.opnameNumber}</strong> sedang berlangsung (dimulai oleh {activeStockOpname.startedBy}). Penambahan (LPB) &amp; Pengurangan Stok (SIV) dikunci sementara.
+              </span>
+            </div>
+            <button
+              onClick={() => setCurrentTab('opname')}
+              className="px-3 py-1 rounded-lg bg-slate-950 hover:bg-slate-800 text-amber-300 font-bold text-[11px] shrink-0 self-start sm:self-auto"
+            >
+              Buka Stock Opname &rarr;
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Active User Status Bar */}
+      <div className="w-full bg-slate-900 border-b border-slate-800 text-slate-200 text-xs py-2 px-3 sm:px-5 lg:px-8 no-print">
+        <div className="w-full max-w-[1920px] mx-auto flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0"></span>
+            <span className="text-slate-300 truncate sm:whitespace-normal">
+              Pengguna Aktif: <strong className="text-white">{currentUser.name}</strong> (@
+              {currentUser.username}) &middot;{' '}
               <span
                 className={
-                  currentUser.role === 'admin'
-                    ? 'text-emerald-400 font-semibold'
+                  currentUser.role === 'superuser'
+                    ? 'text-purple-400 font-bold'
                     : currentUser.role === 'kepala_gudang'
-                    ? 'text-blue-400 font-semibold'
-                    : 'text-amber-400 font-semibold'
+                    ? 'text-blue-400 font-bold'
+                    : currentUser.role === 'admin'
+                    ? 'text-emerald-400 font-bold'
+                    : currentUser.role === 'user'
+                    ? 'text-amber-400 font-semibold'
+                    : 'text-slate-300 font-semibold'
                 }
               >
-                {currentUser.role === 'admin'
-                  ? 'Administrator Gudang'
-                  : currentUser.role === 'kepala_gudang'
-                  ? 'Kepala Gudang'
-                  : `${currentUser.department} (Pemohon SIV)`}
+                {getRoleLabel(currentUser.role, isSuperUser)} &mdash; {currentUser.department}
               </span>
             </span>
-            {(currentUser.role === 'admin' || currentUser.role === 'kepala_gudang') && (
-              <button
-                onClick={() => setCurrentTab('users')}
-                className="inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-[11px] transition-colors"
-              >
-                <Users className="w-3 h-3" />
-                <span>Kelola User</span>
-              </button>
-            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 self-start lg:self-auto">
-            <span className="text-[10px] text-slate-400 font-mono uppercase mr-1">Ganti Peran Cepat:</span>
-            {(() => {
-              const userPemohon = users.find((u) => u.role === 'user' && u.isActive !== false);
-              const userAdmin = users.find((u) => u.role === 'admin' && u.isActive !== false);
-              const userKepala = users.find((u) => u.role === 'kepala_gudang' && u.isActive !== false);
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 self-start sm:self-auto">
+            <button
+              onClick={() => setIsBarcodeScannerOpen(true)}
+              className="inline-flex items-center gap-1 px-2.5 py-1 sm:py-0.5 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-400/40 text-[11px] font-semibold transition-colors cursor-pointer"
+              title="Scan Barcode Barang (Material Code) atau Barcode Lokasi Rak Store"
+            >
+              <ScanBarcode className="w-3 h-3 text-indigo-300" />
+              <span>Scan Barcode Barang &amp; Rak</span>
+            </button>
 
-              return (
-                <>
-                  {userPemohon && (
-                    <button
-                      onClick={() => handleSwitchUser(userPemohon.id)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-                        currentUser.role === 'user'
-                          ? 'bg-amber-500 text-slate-950 border-amber-400 font-bold'
-                          : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
-                      }`}
-                    >
-                      1. Pemohon (@{userPemohon.username})
-                    </button>
-                  )}
-                  {userAdmin && (
-                    <button
-                      onClick={() => handleSwitchUser(userAdmin.id)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-                        currentUser.role === 'admin'
-                          ? 'bg-emerald-500 text-slate-950 border-emerald-400 font-bold'
-                          : 'bg-slate-800 hover:bg-slate-700 text-emerald-300 border-slate-700'
-                      }`}
-                    >
-                      2. Admin Gudang (@{userAdmin.username})
-                    </button>
-                  )}
-                  {userKepala && (
-                    <button
-                      onClick={() => handleSwitchUser(userKepala.id)}
-                      className={`px-2 py-0.5 rounded text-[11px] font-medium border transition-colors ${
-                        currentUser.role === 'kepala_gudang'
-                          ? 'bg-blue-500 text-white border-blue-400 font-bold'
-                          : 'bg-slate-800 hover:bg-slate-700 text-blue-300 border-slate-700'
-                      }`}
-                    >
-                      3. Kepala Gudang (@{userKepala.username})
-                    </button>
-                  )}
-                </>
-              );
-            })()}
+            {canBackupSql && (
+              <>
+                <button
+                  onClick={handleQuickSqlBackup}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 sm:py-0.5 rounded bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-400/40 text-[11px] font-semibold transition-colors cursor-pointer"
+                  title="Download Backup Database SQL (.sql) untuk Server Mandiri"
+                >
+                  <Download className="w-3 h-3 text-teal-300" />
+                  <span>Backup SQL (.sql)</span>
+                </button>
+
+                <button
+                  onClick={() => setIsResetAllModalOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 sm:py-0.5 rounded bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-400/40 text-[11px] font-bold transition-colors cursor-pointer"
+                  title="Reset All — Kosongkan kembali semua transaksi LPB, Stok Barang, dan Nota SIV"
+                >
+                  <Trash2 className="w-3 h-3 text-red-300" />
+                  <span>Reset All (Kosongkan)</span>
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={() => setIsPublicAccessModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 sm:py-0.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 text-[11px] font-semibold transition-colors cursor-pointer"
+              title="Salin Link Login Aplikasi & QR Code untuk dibagikan ke pengguna lain"
+            >
+              <Share2 className="w-3 h-3 text-emerald-400" />
+              <span>Link Login &amp; QR Code</span>
+            </button>
+
+            {isSuperUser && (
+              <button
+                onClick={() => setCurrentTab('superuser-db')}
+                className="inline-flex items-center gap-1 px-2.5 py-1 sm:py-0.5 rounded bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[11px] transition-colors cursor-pointer"
+              >
+                <Database className="w-3 h-3" />
+                <span>Database Superuser &amp; SQL</span>
+              </button>
+            )}
+
+            {perms.canManageLowerUsers && (
+              <button
+                onClick={() => setCurrentTab('users')}
+                className="inline-flex items-center gap-1 px-2.5 py-1 sm:py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-emerald-400 border border-slate-700 text-[11px] transition-colors cursor-pointer"
+              >
+                <Users className="w-3 h-3" />
+                <span>
+                  {isSuperUser
+                    ? `Kelola User & Level (${getRoleShortBadge(currentUser.role, true)})`
+                    : `Kelola User (${getRoleShortBadge(currentUser.role, false)})`}
+                </span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      {/* Main Content Area (Responsive on both Desktop Computer & Mobile Phone) */}
+      <main className="flex-1 w-full max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6">
         {currentTab === 'dashboard' && (
           <DashboardView
             currentUser={currentUser}
@@ -293,7 +337,7 @@ function InventoryAppContent() {
           />
         )}
 
-        {currentTab === 'lpb' && (
+        {currentTab === 'lpb' && (perms.canCreateLPB || perms.canApproveLPBStockAddition) && (
           <LPBView
             currentUser={currentUser}
             lpbDocuments={lpbDocuments}
@@ -302,62 +346,83 @@ function InventoryAppContent() {
           />
         )}
 
-        {currentTab === 'vouchers' && (
-          <IssueVoucherListView
-            currentUser={currentUser}
-            issueVouchers={visibleIssueVouchers}
-            onOpenCreateVoucher={() => setIsCreateVoucherOpen(true)}
-            onOpenEditVoucher={(v) => setVoucherToEdit(v)}
-            onOpenApproval={(v) => setVoucherToApprove(v)}
-            onDeleteVoucher={(id) => deleteIssueVoucher(id)}
-            onPrintVoucher={(doc) => openPrintPreview('NPB', doc)}
-          />
-        )}
+        {currentTab === 'vouchers' &&
+          (perms.canCreateSIV ||
+            perms.canViewAllSIV ||
+            perms.canValidateSIV ||
+            perms.canApproveSIVStockDeduction) && (
+            <IssueVoucherListView
+              currentUser={currentUser}
+              issueVouchers={visibleIssueVouchers}
+              onOpenCreateVoucher={() => setIsCreateVoucherOpen(true)}
+              onOpenEditVoucher={(v) => setVoucherToEdit(v)}
+              onOpenApproval={(v) => setVoucherToApprove(v)}
+              onDeleteVoucher={(id) => deleteIssueVoucher(id)}
+              onPrintVoucher={(doc) => openPrintPreview('NPB', doc)}
+            />
+          )}
 
         {currentTab === 'items' && (
           <StockMasterView
             onViewLedgerItem={handleNavigateToLedgerItem}
-            onNavigateToMinStock={() => setCurrentTab('min-stock')}
+            onNavigateToMinStock={
+              perms.canProposeMinStock ||
+              perms.canVerifyMinStock ||
+              perms.canApproveMinStockSystem
+                ? () => setCurrentTab('min-stock')
+                : undefined
+            }
           />
         )}
 
-        {currentTab === 'min-stock' && (
-          <MinStockManagementView
-            onNavigateToLPB={() => setIsCreateLPBOpen(true)}
-            onNavigateToStockMaster={() => setCurrentTab('items')}
-          />
-        )}
+        {currentTab === 'opname' && <StockOpnameView />}
 
-        {currentTab === 'ledger' && (
+        {currentTab === 'min-stock' &&
+          (perms.canProposeMinStock ||
+            perms.canVerifyMinStock ||
+            perms.canApproveMinStockSystem) && (
+            <MinStockManagementView
+              onNavigateToLPB={() => setIsCreateLPBOpen(true)}
+              onNavigateToStockMaster={() => setCurrentTab('items')}
+            />
+          )}
+
+        {currentTab === 'ledger' && perms.canAccessStockMovement && (
           <StockMovementView preselectedSku={ledgerSkuFilter} />
         )}
 
-        {currentTab === 'activity-log' && <SystemActivityLogView />}
-
-        {currentTab === 'locations' && (
-          <StorageLocationsView
-            onSelectRackForFilter={() => {
-              setCurrentTab('items');
-            }}
-          />
+        {currentTab === 'activity-log' && perms.canViewLowerAuditLogs && (
+          <SystemActivityLogView />
         )}
 
-        {currentTab === 'company' && currentUser.role === 'admin' && (
+        {currentTab === 'locations' &&
+          (perms.canManageCompanyProfile || perms.canManageStockItems) && (
+            <StorageLocationsView
+              onSelectRackForFilter={() => {
+                setCurrentTab('items');
+              }}
+            />
+          )}
+
+        {currentTab === 'company' && perms.canManageCompanyProfile && (
           <CompanySettingsView />
         )}
 
-        {currentTab === 'users' && currentUser.role === 'admin' && (
+        {currentTab === 'users' && perms.canManageLowerUsers && (
           <UserManagementView />
         )}
 
-        {currentTab === 'accounting' && currentUser.role === 'admin' && (
+        {currentTab === 'accounting' && perms.canManageCostCenterGL && (
           <CostCenterGLView />
+        )}
+
+        {currentTab === 'superuser-db' && currentUser.role === 'superuser' && (
+          <SuperuserDatabaseView onNavigateTab={(tab) => setCurrentTab(tab)} />
         )}
       </main>
 
       {/* Modals & Drawers */}
-      {/* 1. Modal Buat LPB (Penambahan Stok dari SJ Supplier) */}
-      {isCreateLPBOpen && (
+      {isCreateLPBOpen && perms.canCreateLPB && (
         <CreateLPBModal
           stockItems={stockItems}
           onClose={() => setIsCreateLPBOpen(false)}
@@ -366,8 +431,7 @@ function InventoryAppContent() {
         />
       )}
 
-      {/* 2. Modal Buat Nota Pengambilan Barang (User SIV) */}
-      {isCreateVoucherOpen && (
+      {isCreateVoucherOpen && perms.canCreateSIV && (
         <CreateIssueVoucherModal
           stockItems={stockItems}
           currentUser={currentUser}
@@ -377,7 +441,6 @@ function InventoryAppContent() {
         />
       )}
 
-      {/* 3. Modal Edit Nota Pengambilan Barang */}
       {voucherToEdit && (
         <EditIssueVoucherModal
           voucher={voucherToEdit}
@@ -387,13 +450,13 @@ function InventoryAppContent() {
         />
       )}
 
-      {/* 4. Modal Approval Kepala Gudang (Tahap 1) & Validasi Scan Barcode Penyerahan Admin Gudang (Tahap 2) */}
       {voucherToApprove && (
         <ApprovalModal
           voucher={voucherToApprove}
           stockItems={stockItems}
           currentAdminName={currentUser.name}
           currentUserRole={currentUser.role}
+          currentUser={currentUser}
           onClose={() => setVoucherToApprove(null)}
           onApprove={(handover) => {
             approveIssueVoucher(voucherToApprove.id, handover);
@@ -413,7 +476,6 @@ function InventoryAppContent() {
         />
       )}
 
-      {/* 5. Printable Document Modal (LPB & NPB) */}
       {selectedDocumentForPrint && (
         <PrintDocumentModal
           documentData={selectedDocumentForPrint}
@@ -421,7 +483,6 @@ function InventoryAppContent() {
         />
       )}
 
-      {/* 6. Notification Center Drawer */}
       <NotificationDrawer
         isOpen={isNotificationDrawerOpen}
         onClose={() => setIsNotificationDrawerOpen(false)}
@@ -434,7 +495,33 @@ function InventoryAppContent() {
         onSelectLPB={handleSelectLPBFromNotif}
       />
 
-      {/* 7. Real-Time Toast Alert */}
+      <PublicAccessModal
+        isOpen={isPublicAccessModalOpen}
+        onClose={() => setIsPublicAccessModalOpen(false)}
+      />
+
+      {isBarcodeScannerOpen && (
+        <BarcodeScannerLookupModal
+          isOpen={isBarcodeScannerOpen}
+          onClose={() => setIsBarcodeScannerOpen(false)}
+        />
+      )}
+
+      <ResetAllModal
+        isOpen={isResetAllModalOpen}
+        onClose={() => setIsResetAllModalOpen(false)}
+        stats={{
+          stockCount: stockItems.length,
+          lpbCount: lpbDocuments.length,
+          sivCount: issueVouchers.length,
+          movementCount: stockMovements.length,
+          opnameCount: stockOpnameSessions.length,
+        }}
+        onResetAllEmpty={() => resetAllTransactionsAndStock('EMPTY_ALL')}
+        onResetTransactionsZeroStock={() => resetAllTransactionsAndStock('ZERO_STOCK_ONLY')}
+        onRestoreDemoData={resetToDefaultData}
+      />
+
       <ToastNotification
         toast={activeToast}
         onDismiss={dismissToast}
@@ -442,13 +529,23 @@ function InventoryAppContent() {
       />
 
       {/* Footer */}
-      <footer className="mt-auto border-t border-slate-200 bg-white py-4 text-xs text-slate-500 no-print">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>&copy; 2026 PT Indo Manufaktur Logistik Utama. Sistem Manajemen Pergudangan & Inventaris.</span>
-          <div className="flex items-center gap-4 text-slate-400">
-            <span>Standar ISO 9001:2015</span>
+      <footer className="mt-auto w-full border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 py-4 text-xs text-slate-500 dark:text-slate-400 no-print transition-colors">
+        <div className="w-full max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-2 text-center sm:text-left">
+          <span>&copy; 2026 PT. Abadi Agrosindo Persada. Sistem Manajemen Store &amp; Inventaris.</span>
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-4 text-slate-400">
+            <button
+              onClick={() => setIsPublicAccessModalOpen(true)}
+              className="text-emerald-600 dark:text-emerald-400 hover:text-emerald-700 font-semibold flex items-center gap-1"
+            >
+              <Share2 className="w-3.5 h-3.5" />
+              <span>Link Login Aplikasi</span>
+            </button>
             <span>&middot;</span>
-            <span>Autentikasi Terproteksi & RBAC</span>
+            <span>
+              {isSuperUser
+                ? 'Hierarki Otorisasi Multi-Level & Database SQL Store'
+                : 'Sistem Otorisasi & Manajemen Inventaris Store'}
+            </span>
           </div>
         </div>
       </footer>
@@ -458,8 +555,10 @@ function InventoryAppContent() {
 
 export default function App() {
   return (
-    <InventoryProvider>
-      <InventoryAppContent />
-    </InventoryProvider>
+    <ThemeProvider>
+      <InventoryProvider>
+        <InventoryAppContent />
+      </InventoryProvider>
+    </ThemeProvider>
   );
 }

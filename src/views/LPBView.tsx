@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { LPBDocument, UserAccount } from '../types/inventory';
+import { LPBDocument, UserAccount, getEffectivePermissions } from '../types/inventory';
 import { useInventory } from '../context/InventoryContext';
 import {
   Search,
@@ -37,8 +37,9 @@ export const LPBView: React.FC<LPBViewProps> = ({
 }) => {
   const { approveLPBStockAddition, rejectLPB, stockItems } = useInventory();
 
-  const isAdmin = currentUser.role === 'admin';
-  const isKepalaGudang = currentUser.role === 'kepala_gudang';
+  const perms = getEffectivePermissions(currentUser);
+  const isAdmin = perms.canCreateLPB;
+  const isKepalaGudang = perms.canApproveLPBStockAddition;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [statusTab, setStatusTab] = useState<'ALL' | 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED'>(
@@ -169,7 +170,7 @@ export const LPBView: React.FC<LPBViewProps> = ({
         'Status LPB',
         'Divalidasi/Scan Admin Gudang',
         'Di-Approve Kepala Gudang',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Qty Diterima',
         'Satuan',
@@ -531,7 +532,7 @@ export const LPBView: React.FC<LPBViewProps> = ({
                       </div>
 
                       <div className="text-[11px] text-slate-500">
-                        Total {totalItemsCount} unit barang ({doc.items.length} macam SKU) &middot;{' '}
+                        Total {totalItemsCount} unit barang ({doc.items.length} macam Material Code) &middot;{' '}
                         {isPendingHeadApprove
                           ? 'Stok fisik gudang belum bertambah (menunggu Approve Kepala Gudang).'
                           : isApproved
@@ -595,7 +596,7 @@ export const LPBView: React.FC<LPBViewProps> = ({
                           <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                             <tr>
                               <th className="px-3 py-2 text-center w-10">No</th>
-                              <th className="px-3 py-2">Kode SKU</th>
+                              <th className="px-3 py-2">Material Code</th>
                               <th className="px-3 py-2">Nama Barang</th>
                               <th className="px-3 py-2 text-center">Validasi Barcode (Admin)</th>
                               <th className="px-3 py-2 text-center">Kondisi</th>
@@ -706,7 +707,7 @@ export const LPBView: React.FC<LPBViewProps> = ({
                 <table className="w-full text-xs text-left">
                   <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                     <tr>
-                      <th className="px-3 py-2.5">Barang &amp; SKU</th>
+                      <th className="px-3 py-2.5">Barang &amp; Material Code</th>
                       <th className="px-3 py-2.5 text-center">Stok Saat Ini</th>
                       <th className="px-3 py-2.5 text-right">Qty Masuk (Validasi Admin)</th>
                       <th className="px-3 py-2.5 text-right">Stok Setelah Approve</th>

@@ -1,6 +1,11 @@
 import React, { useState, useMemo } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { StockItem, MovementVelocityCategory } from '../types/inventory';
+import {
+  StockItem,
+  MovementVelocityCategory,
+  getEffectivePermissions,
+  getRoleHierarchyLevel,
+} from '../types/inventory';
 import {
   Boxes,
   Search,
@@ -19,9 +24,16 @@ import {
   Activity,
   Gauge,
   Layers,
+  Download,
+  ScanBarcode,
+  ArrowRightLeft,
+  CheckCircle2,
+  Lock,
 } from 'lucide-react';
 import { ImportStockItemsModal } from '../components/ImportStockItemsModal';
 import { ThermalLabelDesignerModal } from '../components/ThermalLabelDesignerModal';
+import { BarcodeScannerLookupModal } from '../components/BarcodeScannerLookupModal';
+import { exportStockMasterToExcel } from '../utils/sqlAndExcelExport';
 
 interface StockMasterViewProps {
   onViewLedgerItem: (sku: string) => void;
@@ -41,6 +53,12 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
     updateStockItem,
     deleteStockItem,
     getItemMovementAnalytics,
+    isStockLockedForOpname,
+    activeStockOpname,
+    locationTransferRequests,
+    createLocationTransferRequest,
+    approveLocationTransferRequest,
+    rejectLocationTransferRequest,
   } = useInventory();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -49,6 +67,13 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
   const [viewMode, setViewMode] = useState<'table' | 'submaster'>('table');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isScannerLookupOpen, setIsScannerLookupOpen] = useState(false);
+
+  // Location Transfer Request Modal State
+  const [itemToTransferLoc, setItemToTransferLoc] = useState<StockItem | null>(null);
+  const [transferTargetRack, setTransferTargetRack] = useState('');
+  const [transferReason, setTransferReason] = useState('');
+  const [transferError, setTransferError] = useState('');
 
   // Barcode Thermal Clabel Modal state
   const [isBarcodeThermalOpen, setIsBarcodeThermalOpen] = useState(false);
@@ -78,8 +103,14 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
   const [newLocation, setNewLocation] = useState('Rak A-01');
   const [newDescription, setNewDescription] = useState('');
 
-  const isKepalaGudang = currentUser?.role === 'kepala_gudang';
-  const isAdmin = currentUser?.role === 'admin' || isKepalaGudang;
+  const perms = getEffectivePermissions(currentUser);
+  const isKepalaGudang = perms.canApproveMinStockSystem;
+  const isAdmin = perms.canManageStockItems;
+  const userLevel = currentUser ? getRoleHierarchyLevel(currentUser.role) : 99;
+  const canApproveLocationTransfer =
+    userLevel <= 1 ||
+    currentUser?.role === 'kepala_gudang' ||
+    currentUser?.role === 'superuser';
 
   // Unique categories
   const categories = useMemo(() => {
@@ -94,8 +125,8 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
     let low = 0;
     stockItems.forEach((item) => {
       const m = getItemMovementAnalytics(item.id);
-      if (m.category === 'FAST_MOVING') fast++;
-      else if (m.category === 'MEDIUM_MOVING') medium++;
+      if (m.velocityCategory === 'FAST_MOVING') fast++;
+      else if (m.velocityCategory === 'MEDIUM_MOVING') medium++;
       else low++;
     });
     return { fast, medium, low };
@@ -106,7 +137,8 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
     return stockItems.filter((item) => {
       const matchesCat = selectedCategory === 'ALL' || item.category === selectedCategory;
       const movement = getItemMovementAnalytics(item.id);
-      const matchesVelocity = selectedVelocity === 'ALL' || movement.category === selectedVelocity;
+      const matchesVelocity =
+        selectedVelocity === 'ALL' || movement.velocityCategory === selectedVelocity;
       const q = searchQuery.toLowerCase();
       const matchesSearch =
         !q ||
@@ -179,7 +211,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
       category: newCategory,
       unit: newUnit,
       minStock: Number(newMinStock),
-      initialStock: Number(newInitialStock),
+      currentStock: Number(newInitialStock),
       location: newLocation,
       description: newDescription,
     });
@@ -208,9 +240,38 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
     return minStockProposals.filter((p) => p.status === 'PENDING').length;
   }, [minStockProposals]);
 
+  const pendingLocationTransfers = useMemo(
+    () => locationTransferRequests.filter((r) => r.status === 'PENDING_KEPALA'),
+    [locationTransferRequests]
+  );
+
+  const handleOpenTransferLocation = (item: StockItem) => {
+    setItemToTransferLoc(item);
+    const nextRack = storageLocations.find((l) => l.code !== item.location);
+    setTransferTargetRack(nextRack?.code || storageLocations[0]?.code || '');
+    setTransferReason('');
+    setTransferError('');
+  };
+
+  const handleSubmitTransferLocation = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!itemToTransferLoc) return;
+    setTransferError('');
+    const res = createLocationTransferRequest({
+      itemId: itemToTransferLoc.id,
+      toLocation: transferTargetRack,
+      reason: transferReason,
+    });
+    if (!res.success) {
+      setTransferError(res.error || 'Gagal mengajukan pindah lokasi rak.');
+      return;
+    }
+    setItemToTransferLoc(null);
+  };
+
   const renderVelocityBadge = (itemId: string) => {
     const m = getItemMovementAnalytics(itemId);
-    if (m.category === 'FAST_MOVING') {
+    if (m.velocityCategory === 'FAST_MOVING') {
       return (
         <div className="inline-flex flex-col items-center">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-orange-100 text-orange-900 border border-orange-300 whitespace-nowrap">
@@ -218,12 +279,12 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <span>Fast Moving</span>
           </span>
           <span className="text-[10px] font-mono text-slate-500 mt-0.5">
-            Keluar: {m.totalOutQty} ({m.outboundFrequency}x)
+            Keluar: {m.totalOutQty} ({m.outFrequency}x)
           </span>
         </div>
       );
     }
-    if (m.category === 'MEDIUM_MOVING') {
+    if (m.velocityCategory === 'MEDIUM_MOVING') {
       return (
         <div className="inline-flex flex-col items-center">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10.5px] font-bold bg-blue-100 text-blue-900 border border-blue-300 whitespace-nowrap">
@@ -231,7 +292,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <span>Medium Moving</span>
           </span>
           <span className="text-[10px] font-mono text-slate-500 mt-0.5">
-            Keluar: {m.totalOutQty} ({m.outboundFrequency}x)
+            Keluar: {m.totalOutQty} ({m.outFrequency}x)
           </span>
         </div>
       );
@@ -243,7 +304,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
           <span>Low Moving</span>
         </span>
         <span className="text-[10px] font-mono text-slate-400 mt-0.5">
-          Keluar: {m.totalOutQty} ({m.outboundFrequency}x)
+          Keluar: {m.totalOutQty} ({m.outFrequency}x)
         </span>
       </div>
     );
@@ -251,6 +312,80 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
 
   return (
     <div className="space-y-5">
+      {/* Banner Lock Stock Opname */}
+      {isStockLockedForOpname && activeStockOpname && (
+        <div className="p-4 rounded-xl bg-amber-950 text-white border border-amber-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-300 shrink-0">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-xs sm:text-sm font-bold text-amber-300">
+                STOK STORE SEDANG DI-LOCK — Sesi Stock Opname Aktif ({activeStockOpname.opnameNumber})
+              </h3>
+              <p className="text-[11px] text-slate-300">
+                Dimulai oleh <strong>{activeStockOpname.startedBy}</strong>. Penambahan &amp; pengurangan stok dikunci hingga Stock Opname diselesaikan.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Banner Pengajuan Pindah Lokasi Rak Menunggu ACC Kepala Store */}
+      {pendingLocationTransfers.length > 0 && (
+        <div className="bg-white rounded-xl border border-indigo-200 shadow-2xs overflow-hidden">
+          <div className="px-4 py-2.5 bg-indigo-950 text-white flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs font-bold">
+              <ArrowRightLeft className="w-4 h-4 text-amber-400" />
+              <span>
+                Pengajuan Pindah Lokasi Rak Barang ({pendingLocationTransfers.length} Menunggu ACC Kepala Store)
+              </span>
+            </div>
+          </div>
+          <div className="p-3 divide-y divide-slate-100 text-xs">
+            {pendingLocationTransfers.map((req) => (
+              <div
+                key={req.id}
+                className="py-2 first:pt-0 last:pb-0 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+              >
+                <div>
+                  <span className="font-mono font-bold text-slate-900 mr-1.5">{req.requestNumber}:</span>
+                  <span className="font-bold text-indigo-700">{req.sku}</span> ({req.itemName}) &mdash; Pindah dari{' '}
+                  <span className="font-mono font-bold px-1.5 py-0.5 bg-slate-100 rounded">{req.fromLocation}</span> ke{' '}
+                  <span className="font-mono font-bold px-1.5 py-0.5 bg-emerald-100 text-emerald-900 rounded">
+                    {req.toLocation}
+                  </span>{' '}
+                  <span className="text-slate-500">({req.reason} • Oleh: {req.requestedBy})</span>
+                </div>
+                {canApproveLocationTransfer ? (
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => approveLocationTransferRequest(req.id)}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-[11px] inline-flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>ACC Kepala Store</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => rejectLocationTransferRequest(req.id, 'Ditolak oleh Kepala Store')}
+                      className="px-2.5 py-1 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 font-semibold text-[11px]"
+                    >
+                      Tolak
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 shrink-0">
+                    Menunggu ACC Kepala Store
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Peringatan Stock Mendekati / Melampaui Batas Minimum */}
       {(criticalItems.length > 0 || approachingItems.length > 0) && (
         <div className="bg-white rounded-xl border border-red-200 shadow-xs overflow-hidden">
@@ -259,7 +394,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
               <ShieldAlert className="w-5 h-5 shrink-0 animate-bounce" />
               <div>
                 <h3 className="text-xs sm:text-sm font-bold">
-                  Peringatan Saldo Stok Minimum Gudang ({criticalItems.length} Melampaui Batas, {approachingItems.length} Mendekati Batas)
+                  Peringatan Saldo Stok Minimum Store ({criticalItems.length} Melampaui Batas, {approachingItems.length} Mendekati Batas)
                 </h3>
                 <p className="text-[11px] text-red-50">
                   Segera lakukan restock (LPB) atau ajukan penyesuaian batas stok minimum untuk mencegah kehabisan suku cadang.
@@ -346,7 +481,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <p className={`text-[11px] font-semibold uppercase ${selectedVelocity === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>
               Total Semua Barang
             </p>
-            <p className="text-xl font-bold font-mono mt-0.5">{stockItems.length} SKU</p>
+            <p className="text-xl font-bold font-mono mt-0.5">{stockItems.length} Material Code</p>
             <p className={`text-[10.5px] mt-0.5 ${selectedVelocity === 'ALL' ? 'text-slate-300' : 'text-slate-500'}`}>
               Semua kategori pergerakan
             </p>
@@ -367,7 +502,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <p className={`text-[11px] font-bold uppercase ${selectedVelocity === 'FAST_MOVING' ? 'text-orange-100' : 'text-orange-700'}`}>
               Fast Moving (Cepat)
             </p>
-            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.fast} SKU</p>
+            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.fast} Material Code</p>
             <p className={`text-[10.5px] mt-0.5 ${selectedVelocity === 'FAST_MOVING' ? 'text-orange-100' : 'text-slate-500'}`}>
               Tingkat keluar barang tinggi
             </p>
@@ -388,7 +523,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <p className={`text-[11px] font-bold uppercase ${selectedVelocity === 'MEDIUM_MOVING' ? 'text-blue-100' : 'text-blue-700'}`}>
               Medium Moving (Sedang)
             </p>
-            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.medium} SKU</p>
+            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.medium} Material Code</p>
             <p className={`text-[10.5px] mt-0.5 ${selectedVelocity === 'MEDIUM_MOVING' ? 'text-blue-100' : 'text-slate-500'}`}>
               Pergerakan keluar moderat
             </p>
@@ -409,7 +544,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             <p className={`text-[11px] font-bold uppercase ${selectedVelocity === 'LOW_MOVING' ? 'text-slate-200' : 'text-slate-600'}`}>
               Low Moving (Lambat)
             </p>
-            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.low} SKU</p>
+            <p className="text-xl font-bold font-mono mt-0.5">{velocitySummary.low} Material Code</p>
             <p className={`text-[10.5px] mt-0.5 ${selectedVelocity === 'LOW_MOVING' ? 'text-slate-200' : 'text-slate-500'}`}>
               Jarang keluar / slow moving
             </p>
@@ -424,10 +559,10 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
           <div>
             <h1 className="text-lg font-bold text-slate-900 flex items-center gap-2">
               <Boxes className="w-5 h-5 text-slate-700" />
-              <span>Katalog Master &amp; Sub-Master Stok Gudang</span>
+              <span>Katalog Master &amp; Sub-Master Stok Store</span>
             </h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Pantau stok fisik, batas stok minimum (Safety Stock) pada setiap barang di sub-master, serta analisa Fast / Medium / Low Moving.
+              Pantau stok fisik, batas stok minimum (Safety Stock), pindah lokasi rak, scan barcode barang/rak, serta export master ke Excel.
             </p>
           </div>
 
@@ -456,22 +591,43 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             </div>
 
             <button
+              type="button"
+              onClick={() => setIsScannerLookupOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs"
+              title="Scan Barcode Barang (Material Code) atau Barcode Lokasi Rak"
+            >
+              <ScanBarcode className="w-4 h-4" />
+              <span>Scan Barcode Barang &amp; Rak</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => exportStockMasterToExcel(stockItems, getItemMovementAnalytics)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-emerald-950 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-lg transition-colors shadow-2xs"
+              title="Export Master Stok Barang & Sub-Master Kategori ke File Excel (.xlsx)"
+            >
+              <Download className="w-4 h-4 text-emerald-700" />
+              <span>Export Master Excel (.xlsx)</span>
+            </button>
+
+            <button
               onClick={() => {
                 setItemsToPrintBarcode(filteredItems.length > 0 ? filteredItems : stockItems);
                 setIsBarcodeThermalOpen(true);
               }}
               className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-300 rounded-lg transition-colors shadow-xs"
-              title="Desain & cetak stiker barcode thermal Clabel dengan template ukuran kertas"
+              title="Preview & cetak stiker barcode thermal Clabel dengan template ukuran kertas"
             >
               <Barcode className="w-4 h-4 text-slate-950" />
-              <span>Desain &amp; Cetak Barcode (Clabel)</span>
+              <span>Preview &amp; Cetak Barcode</span>
             </button>
 
             {isAdmin && (
               <>
                 <button
                   onClick={() => setIsImportModalOpen(true)}
-                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors shadow-2xs"
+                  disabled={isStockLockedForOpname}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors shadow-2xs disabled:opacity-50"
                 >
                   <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
                   <span>Import Excel</span>
@@ -514,7 +670,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari SKU, nama barang, lokasi rak..."
+              placeholder="Cari Material Code, nama barang, lokasi rak..."
               className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-900 focus:bg-white focus:outline-hidden"
             />
             {searchQuery && (
@@ -557,7 +713,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200">
                       <tr>
-                        <th className="px-4 py-2.5">Kode SKU</th>
+                        <th className="px-4 py-2.5">Material Code</th>
                         <th className="px-4 py-2.5">Nama Barang Sub-Master</th>
                         <th className="px-4 py-2.5 text-center">Lokasi Rak</th>
                         <th className="px-4 py-2.5 text-right">Stok Fisik</th>
@@ -625,7 +781,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
               <table className="w-full text-xs text-left">
                 <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                   <tr>
-                    <th className="px-4 py-3">Kode SKU</th>
+                    <th className="px-4 py-3">Material Code</th>
                     <th className="px-4 py-3">Nama Barang &amp; Sub-Master</th>
                     <th className="px-4 py-3">Kategori</th>
                     <th className="px-4 py-3 text-center">Lokasi Rak</th>
@@ -736,10 +892,20 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
                                   setIsBarcodeThermalOpen(true);
                                 }}
                                 className="p-1.5 text-amber-600 hover:text-amber-700 hover:bg-amber-50 rounded transition-colors"
-                                title="Cetak Barcode Stiker Clabel"
+                                title="Preview & Cetak Barcode Stiker Clabel"
                               >
                                 <Barcode className="w-4 h-4" />
                               </button>
+
+                              {isAdmin && (
+                                <button
+                                  onClick={() => handleOpenTransferLocation(item)}
+                                  className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded transition-colors"
+                                  title="Ajukan Pindah Lokasi Rak (Terealisasi saat di-ACC Kepala Store)"
+                                >
+                                  <ArrowRightLeft className="w-4 h-4" />
+                                </button>
+                              )}
 
                               <button
                                 onClick={() => onViewLedgerItem(item.sku)}
@@ -766,7 +932,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
                                     setDeleteError('');
                                   }}
                                   className="p-1.5 text-red-500 hover:text-red-700 hover:bg-red-50 rounded transition-colors"
-                                  title="Hapus SKU Barang"
+                                  title="Hapus Material Code Barang"
                                 >
                                   <Trash2 className="w-4 h-4" />
                                 </button>
@@ -914,14 +1080,14 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
         </>
       )}
 
-      {/* MODAL 1: Tambah Master SKU Baru (Create) */}
+      {/* MODAL 1: Tambah Master Material Code Baru (Create) */}
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
           <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-6">
             <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
               <div className="flex items-center gap-2">
                 <Boxes className="w-5 h-5 text-emerald-400" />
-                <h2 className="text-base font-semibold">Tambah SKU Master Barang Baru</h2>
+                <h2 className="text-base font-semibold">Tambah Material Code Master Barang Baru</h2>
               </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
@@ -935,7 +1101,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Kode SKU <span className="text-red-500">*</span>
+                    Material Code <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -1083,7 +1249,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
                   type="submit"
                   className="px-5 py-2 font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
                 >
-                  Simpan SKU Baru
+                  Simpan Material Code Baru
                 </button>
               </div>
             </form>
@@ -1114,7 +1280,7 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">
-                    Kode SKU <span className="text-red-500">*</span>
+                    Material Code <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -1251,10 +1417,10 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             </div>
 
             <h3 className="text-base font-bold text-slate-900 text-center">
-              Hapus SKU Barang "{itemToDelete.name}"?
+              Hapus Material Code Barang "{itemToDelete.name}"?
             </h3>
             <p className="text-xs text-slate-600 text-center mt-2 leading-relaxed">
-              Anda akan menghapus SKU <strong className="font-mono">{itemToDelete.sku}</strong> dari katalog master.
+              Anda akan menghapus Material Code <strong className="font-mono">{itemToDelete.sku}</strong> dari katalog master.
               {itemToDelete.currentStock > 0 && (
                 <span className="block text-amber-700 font-semibold mt-1">
                   Catatan: Barang ini masih memiliki saldo fisik sebanyak {itemToDelete.currentStock} {itemToDelete.unit}.
@@ -1294,6 +1460,105 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
         <ImportStockItemsModal onClose={() => setIsImportModalOpen(false)} />
       )}
 
+      {/* Modal Ajukan Pindah Lokasi Rak Barang */}
+      {itemToTransferLoc && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="relative w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-6">
+            <div className="flex items-center justify-between px-6 py-4 bg-slate-900 text-white">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold">
+                    Ajukan Pindah Lokasi Rak ({itemToTransferLoc.sku})
+                  </h2>
+                  <p className="text-[11px] text-slate-300">
+                    Perubahan lokasi akan terealisasi setelah di-ACC oleh Kepala Store
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setItemToTransferLoc(null)}
+                className="p-1 text-slate-400 hover:text-white rounded"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitTransferLocation} className="p-5 sm:p-6 space-y-4 text-xs">
+              {transferError && (
+                <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800 font-medium">
+                  {transferError}
+                </div>
+              )}
+
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] text-slate-500">Barang:</div>
+                  <div className="font-bold text-slate-900">{itemToTransferLoc.name}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[11px] text-slate-500">Rak Saat Ini (Asal):</div>
+                  <div className="font-mono font-bold text-slate-900">
+                    {itemToTransferLoc.location}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Pilih Lokasi Rak Tujuan Baru <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={transferTargetRack}
+                  onChange={(e) => setTransferTargetRack(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono font-bold text-slate-900 bg-white focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                >
+                  {storageLocations.map((loc) => (
+                    <option
+                      key={loc.id}
+                      value={loc.code}
+                      disabled={loc.code === itemToTransferLoc.location}
+                    >
+                      {loc.code} — {loc.name} ({loc.zone})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Alasan Pemindahan Lokasi Rak <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  rows={2}
+                  required
+                  value={transferReason}
+                  onChange={(e) => setTransferReason(e.target.value)}
+                  placeholder="Contoh: Penataan ulang rak barang Fast Moving Store..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setItemToTransferLoc(null)}
+                  className="px-4 py-2 text-slate-600 hover:text-slate-800 font-medium"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs"
+                >
+                  Ajukan ke Kepala Store
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Modal Desainer & Cetak Barcode Stiker Thermal Clabel */}
       {isBarcodeThermalOpen && (
         <ThermalLabelDesignerModal
@@ -1303,6 +1568,14 @@ export const StockMasterView: React.FC<StockMasterViewProps> = ({
             setIsBarcodeThermalOpen(false);
             setItemsToPrintBarcode([]);
           }}
+        />
+      )}
+
+      {/* Modal Scan Barcode Barang & Lokasi Rak */}
+      {isScannerLookupOpen && (
+        <BarcodeScannerLookupModal
+          isOpen={isScannerLookupOpen}
+          onClose={() => setIsScannerLookupOpen(false)}
         />
       )}
     </div>

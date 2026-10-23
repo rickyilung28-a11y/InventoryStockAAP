@@ -1,0 +1,657 @@
+{
+  "updatedAt": "2026-10-22T18:38:00.000Z",
+  "version": 59,
+  "stockItems": [],
+  "lpbDocuments": [],
+  "issueVouchers": [],
+  "stockMovements": [],
+  "notifications": [],
+  "costCenters": [
+    {
+      "code": "10",
+      "name": "Produksi Utama (Raw Mill & Kiln)",
+      "description": "Divisi produksi klinker dan penggilingan"
+    },
+    {
+      "code": "20",
+      "name": "Pemeliharaan Mesin & Workshop",
+      "description": "Divisi mekanikal, bubut, dan reparasi"
+    },
+    {
+      "code": "30",
+      "name": "Quality Control & Laboratorium",
+      "description": "Pengujian sampel dan mutu produk"
+    },
+    {
+      "code": "40",
+      "name": "Elektrikal & Instrumentasi",
+      "description": "Panel kontrol, PLC, dan kelistrikan"
+    },
+    {
+      "code": "50",
+      "name": "Store Sparepart & Logistik",
+      "description": "Pengelolaan penyimpanan material pabrik"
+    },
+    {
+      "code": "60",
+      "name": "Bagging Plant 2 & Pemuatan",
+      "description": "Pengemasan kantong semen & forklift"
+    },
+    {
+      "code": "70",
+      "name": "Pengemasan & Distribusi Curah",
+      "description": "Silo curah & ekspedisi pengiriman"
+    },
+    {
+      "code": "80",
+      "name": "Umum, K3 & Utilitas Pabrik",
+      "description": "Water treatment, kompresor, genset"
+    }
+  ],
+  "glAccounts": [
+    {
+      "code": "51010",
+      "name": "Biaya Sparepart Mesin & Peralatan",
+      "description": "Bearing, seal, rantai, v-belt, sprocket"
+    },
+    {
+      "code": "51020",
+      "name": "Biaya Pemeliharaan & Reparasi",
+      "description": "Servis rutin dan penggantian berkala"
+    },
+    {
+      "code": "51030",
+      "name": "Biaya Pelumas, Gemuk & Oli Hidrolik",
+      "description": "Oli mesin, oli hidrolik, grease pelumas"
+    },
+    {
+      "code": "51040",
+      "name": "Perlengkapan K3 & Safety Work",
+      "description": "Sarung tangan, helm safety, APD, kacamata"
+    },
+    {
+      "code": "51050",
+      "name": "Komponen Elektrikal & Kabel Panel",
+      "description": "Kabel, MCB, inverter, kontaktor"
+    },
+    {
+      "code": "51060",
+      "name": "Bahan Habis Pakai & Store (ATK/Label)",
+      "description": "Kertas label barcode, strapping band, cutter"
+    },
+    {
+      "code": "51070",
+      "name": "Fastener, Baut, Mur & Flange",
+      "description": "Hex bolt stainless, ring washer, gasket"
+    },
+    {
+      "code": "51090",
+      "name": "Beban Operasional Store Lainnya",
+      "description": "Pengeluaran pemakaian operasional rupa-rupa"
+    }
+  ],
+  "storageLocations": [
+    {
+      "id": "loc_1",
+      "code": "Rak A-01",
+      "name": "Rak A-01 (Mekanik & Bearing)",
+      "zone": "Zona A - Sparepart Mesin",
+      "description": "Bearing, pillow block, v-belt & seal"
+    },
+    {
+      "id": "loc_2",
+      "code": "Rak A-02",
+      "name": "Rak A-02 (Rantai & Sprocket)",
+      "zone": "Zona A - Sparepart Mesin",
+      "description": "Roller chain, coupling & pulley"
+    },
+    {
+      "id": "loc_3",
+      "code": "Rak B-02",
+      "name": "Rak B-02 (Elektrik & Sensor)",
+      "zone": "Zona B - Elektrikal & PLC",
+      "description": "Inverter, sensor photoelectric, proximity"
+    },
+    {
+      "id": "loc_4",
+      "code": "Rak B-03",
+      "name": "Rak B-03 (Pneumatik & Valve)",
+      "zone": "Zona B - Instrumentasi",
+      "description": "Solenoid valve, silinder pneumatik & fitting"
+    },
+    {
+      "id": "loc_5",
+      "code": "Rak C-01",
+      "name": "Rak C-01 (Pelumas & Kimia)",
+      "zone": "Zona C - Bahan Kimia & Oli",
+      "description": "Grease drum, oli hidrolik & penetrating oil"
+    },
+    {
+      "id": "loc_6",
+      "code": "Rak D-01",
+      "name": "Rak D-01 (Fastener & Baut)",
+      "zone": "Zona D - Hardware",
+      "description": "Hex bolt, mur stainless, washer & gasket"
+    },
+    {
+      "id": "loc_7",
+      "code": "Pallet-Lantai",
+      "name": "Pallet Lantai Area Bongkar Muat",
+      "zone": "Zona Transit Penerimaan",
+      "description": "Area transit barang baru masuk dari supplier"
+    }
+  ],
+  "companyProfile": {
+    "appName": "SISTEM INVENTORY CONTROL STORE",
+    "appTagline": "PT ABADI AGROSINDO PERSADA",
+    "companyName": "PT ABADI AGROSINDO PERSADA",
+    "city": "Sidoarjo",
+    "address": "Bakungtemenggungan Kec. Balongbendo Sidoarjo - Jawa Timur",
+    "phone": "",
+    "email": "",
+    "logoUrl": "/logo-aap.svg",
+    "sivDocCode": "FR/AAP/G-STR/23/001",
+    "lpbDocCode": "FR/AAP/G-LPB/23/002"
+  },
+  "minStockProposals": [],
+  "stockOpnameSessions": [],
+  "locationTransferRequests": [],
+  "activityLogs": [
+    {
+      "id": "log_reset_all_1792690578300",
+      "timestamp": "2026-10-22T17:36:18.300Z",
+      "actorId": "user_super_0",
+      "actorName": "Ir. Hendrawan Wijaya",
+      "actorUsername": "superuser",
+      "actorRole": "superuser",
+      "actorDepartment": "Direksi & Super Administrator",
+      "category": "STOCK_ADJUSTMENT",
+      "action": "RESET_ALL_EMPTY",
+      "title": "Reset All: Kosongkan Semua Transaksi & Stok (LPB, Stok & SIV Kosong)",
+      "description": "Seluruh transaksi LPB, Nota Pengambilan Barang (SIV), Master Stok Barang, Kartu Stok, dan Sesi Stock Opname telah dikosongkan kembali (0 data).",
+      "referenceNumber": "RESET-ALL"
+    },
+    {
+      "id": "log_reset_all_1792690577447",
+      "timestamp": "2026-10-22T17:36:17.447Z",
+      "actorId": "user_super_0",
+      "actorName": "Ir. Hendrawan Wijaya",
+      "actorUsername": "superuser",
+      "actorRole": "superuser",
+      "actorDepartment": "Direksi & Super Administrator",
+      "category": "STOCK_ADJUSTMENT",
+      "action": "RESET_TRANSACTIONS_ZERO_STOCK",
+      "title": "Reset All: Kosongkan Transaksi (LPB & SIV) & Nolkan Saldo Stok",
+      "description": "Seluruh dokumen LPB, Nota SIV, Kartu Stok, dan Sesi Opname telah dikosongkan. Saldo fisik & alokasi 8 item barang direset menjadi 0.",
+      "referenceNumber": "RESET-ALL"
+    },
+    {
+      "id": "act_log_1",
+      "timestamp": "2026-10-16T09:15:00Z",
+      "category": "APPROVAL_WORKFLOW",
+      "action": "MIN_STOCK_PROPOSED",
+      "title": "Pengajuan Perubahan Stok Minimal Baru",
+      "description": "Budi Santoso mengajukan perubahan batas stok minimal untuk SKU-OIL-004 (Oli Hidrolik Tellus S2 M 68) dari 30 Drum menjadi 45 Drum.",
+      "actorName": "Budi Santoso",
+      "actorUsername": "budi.produksi",
+      "actorRole": "user",
+      "referenceNumber": "PROP-MIN-202610-0001"
+    },
+    {
+      "id": "act_log_2",
+      "timestamp": "2026-10-15T08:10:00Z",
+      "category": "APPROVAL_WORKFLOW",
+      "action": "SIV_CREATED",
+      "title": "Penerbitan Nota Pengambilan Barang (SIV)",
+      "description": "Budi Santoso membuat Nota Pengambilan Barang #NPB-202610-0003 untuk keperluan Penggantian Sparepart Rutin Line 1 (status: PENDING ACC).",
+      "actorName": "Budi Santoso",
+      "actorUsername": "budi.produksi",
+      "actorRole": "user",
+      "referenceNumber": "NPB-202610-0003"
+    },
+    {
+      "id": "act_log_3",
+      "timestamp": "2026-10-14T14:20:00Z",
+      "category": "APPROVAL_WORKFLOW",
+      "action": "SIV_APPROVED",
+      "title": "Persetujuan (ACC) & Serah Terima SIV",
+      "description": "Admin Store Hendra Gunawan menyetujui (ACC) Nota #NPB-202610-0001. Barang diserahkan oleh Hendra Gunawan kepada penerima Budi Santoso.",
+      "actorName": "Hendra Gunawan",
+      "actorUsername": "admin.store",
+      "actorRole": "admin",
+      "referenceNumber": "NPB-202610-0001"
+    },
+    {
+      "id": "act_log_4",
+      "timestamp": "2026-10-14T14:20:05Z",
+      "category": "STOCK_ADJUSTMENT",
+      "action": "STOCK_DEDUCTED_SIV",
+      "title": "Pemotongan Stok Fisik Otomatis dari SIV",
+      "description": "Stok fisik dipotong otomatis berdasarkan persetujuan Nota #NPB-202610-0001 (Bearing Ball 6204-2RS SKF -4 Pcs, V-Belt B-52 Mitsuboshi -2 Pcs).",
+      "actorName": "Hendra Gunawan",
+      "actorUsername": "admin.store",
+      "actorRole": "admin",
+      "referenceNumber": "NPB-202610-0001"
+    },
+    {
+      "id": "act_log_5",
+      "timestamp": "2026-10-13T10:30:00Z",
+      "category": "STOCK_ADJUSTMENT",
+      "action": "LPB_CREATED",
+      "title": "Penerimaan Barang Masuk Supplier (LPB)",
+      "description": "Admin Store Hendra Gunawan mencatat LPB #LPB-202610-0002 dari PT. Sinar Teknik Mandiri (SJ-STM-8821) dan menambah stok fisik store.",
+      "actorName": "Hendra Gunawan",
+      "actorUsername": "admin.store",
+      "actorRole": "admin",
+      "referenceNumber": "LPB-202610-0002"
+    },
+    {
+      "id": "act_log_6",
+      "timestamp": "2026-10-13T08:45:00Z",
+      "category": "APPROVAL_WORKFLOW",
+      "action": "MIN_STOCK_APPROVED",
+      "title": "Persetujuan (ACC) Batas Stok Minimal",
+      "description": "Kepala Store menyetujui pengajuan #PROP-MIN-202610-0002 oleh Siti Aminah. Stok minimal SKU-BRG-001 resmi diperbarui dari 10 Pcs menjadi 15 Pcs.",
+      "actorName": "Suryadi",
+      "actorUsername": "kepala",
+      "actorRole": "kepala_gudang",
+      "referenceNumber": "PROP-MIN-202610-0002"
+    },
+    {
+      "id": "act_log_7",
+      "timestamp": "2026-10-11T16:00:00Z",
+      "category": "USER_CHANGE",
+      "action": "USER_VERIFIED",
+      "title": "Inisialisasi & Audit Akun Pengguna Sistem",
+      "description": "Akun pengguna departemen Produksi, Maintenance, dan Elektrikal terverifikasi aktif dengan hak akses RBAC Store.",
+      "actorName": "Hendra Gunawan",
+      "actorUsername": "admin.store",
+      "actorRole": "admin",
+      "referenceNumber": "RBAC-INIT"
+    }
+  ],
+  "users": [
+    {
+      "id": "user_super_0",
+      "username": "superuser",
+      "password": "super123",
+      "name": "Aris",
+      "role": "superuser",
+      "department": "management",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-01-01T08:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": true,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": true,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": true,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_kepala_1",
+      "username": "kepala",
+      "password": "kepala123",
+      "name": "Dhany Ramadhio",
+      "role": "kepala_gudang",
+      "department": "Store",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-01-12T08:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": true,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": true,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": true,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_admin_1",
+      "username": "admin",
+      "password": "super123",
+      "name": "Riki",
+      "role": "admin",
+      "department": "Store",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-01-10T08:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_staff_1",
+      "username": "fadel",
+      "password": "user123",
+      "name": "Fadel",
+      "role": "user",
+      "department": "MT MTE",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-02-15T09:30:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": true,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_staff_2",
+      "username": "feby",
+      "password": "user123",
+      "name": "Feby",
+      "role": "user",
+      "department": "MT MTE",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-03-01T10:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": true,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_staff_3",
+      "username": "adam",
+      "password": "user123",
+      "name": "Adam",
+      "role": "user",
+      "department": "MT MTE",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-04-12T11:20:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": true,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_staff_4",
+      "username": "alif",
+      "password": "user123",
+      "name": "Alif",
+      "role": "user",
+      "department": "Kepala Produksi",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-04-14T09:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": true,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "id": "user_view_4",
+      "username": "enrico",
+      "password": "view123",
+      "name": "Enrico",
+      "role": "viewer",
+      "department": "MTE",
+      "email": "",
+      "isActive": true,
+      "createdAt": "2026-04-15T08:00:00Z",
+      "permissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": false,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": false,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": false
+      }
+    }
+  ],
+  "roleDefinitions": [
+    {
+      "roleKey": "superuser",
+      "levelNumber": 0,
+      "name": "Super User (All Akses)",
+      "badgeLabel": "LVL 0 • SUPER USER",
+      "description": "Akses penuh ke seluruh modul aplikasi, Master Database Superuser, manajemen kategori level jabatan, mutasi barang, approval penuh, dan pengaturan semua level di bawahnya.",
+      "colorTheme": "amber",
+      "isSystemDefault": true,
+      "defaultPermissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": true,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": true,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": true,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "roleKey": "kepala_gudang",
+      "levelNumber": 1,
+      "name": "Kepala Store",
+      "badgeLabel": "LVL 1 • KEPALA STORE",
+      "description": "ACC SIV & validasi pengurangan stock, ACC LPB penambahan stock, tambah Cost Center & GL, kelola user & hak akses level di bawahnya, ACC stok minimal sistem, akses mutasi barang, dan log audit level bawah.",
+      "colorTheme": "violet",
+      "isSystemDefault": true,
+      "defaultPermissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": true,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": true,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": true,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "roleKey": "admin",
+      "levelNumber": 2,
+      "name": "Admin Store",
+      "badgeLabel": "LVL 2 • ADMIN STORE",
+      "description": "Melihat semua SIV masuk, ACC SIV & validasi barang, input LPB, tambah barang baru, tambah Cost Center & GL, kelola user & hak akses level di bawahnya, verifikasi stok minimal, akses mutasi barang, dan lock/audit user bawah.",
+      "colorTheme": "emerald",
+      "isSystemDefault": true,
+      "defaultPermissions": {
+        "canViewStock": true,
+        "canManageStockItems": true,
+        "canCreateSIV": true,
+        "canViewAllSIV": true,
+        "canValidateSIV": true,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": true,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": true,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": true,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": true,
+        "canManageLowerUsers": true,
+        "canViewLowerAuditLogs": true,
+        "canManageCompanyProfile": true,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "roleKey": "user",
+      "levelNumber": 3,
+      "name": "Pemohon (SIV)",
+      "badgeLabel": "LVL 3 • PEMOHON",
+      "description": "Menerbitkan SIV (Nota Pengambilan Barang), melihat stok store, mengajukan perubahan stok minimal, membantu melakukan Stock Opname (saat stok akhir ter-lock), dan melihat riwayat SIV sendiri.",
+      "colorTheme": "blue",
+      "isSystemDefault": true,
+      "defaultPermissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": true,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": true,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": true
+      }
+    },
+    {
+      "roleKey": "viewer",
+      "levelNumber": 4,
+      "name": "View (Hanya Lihat Stok)",
+      "badgeLabel": "LVL 4 • VIEW",
+      "description": "Hanya dapat melihat posisi stok barang di store (Read-Only Monitoring).",
+      "colorTheme": "slate",
+      "isSystemDefault": true,
+      "defaultPermissions": {
+        "canViewStock": true,
+        "canManageStockItems": false,
+        "canCreateSIV": false,
+        "canViewAllSIV": false,
+        "canValidateSIV": false,
+        "canApproveSIVStockDeduction": false,
+        "canCreateLPB": false,
+        "canApproveLPBStockAddition": false,
+        "canManageCostCenterGL": false,
+        "canProposeMinStock": false,
+        "canVerifyMinStock": false,
+        "canApproveMinStockSystem": false,
+        "canAccessStockMovement": false,
+        "canManageLowerUsers": false,
+        "canViewLowerAuditLogs": false,
+        "canManageCompanyProfile": false,
+        "canPerformStockOpname": false
+      }
+    }
+  ]
+}

@@ -1,5 +1,12 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { IssueVoucherDocument, StockItem, UserRole } from '../types/inventory';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useInventory } from '../context/InventoryContext';
+import {
+  IssueVoucherDocument,
+  StockItem,
+  UserRole,
+  UserAccount,
+  getEffectivePermissions,
+} from '../types/inventory';
 import {
   CheckCircle2,
   XCircle,
@@ -18,6 +25,7 @@ import {
   FileCheck2,
   Ban,
   Lock,
+  MapPin,
 } from 'lucide-react';
 
 interface ApprovalModalProps {
@@ -25,6 +33,7 @@ interface ApprovalModalProps {
   stockItems: StockItem[];
   currentAdminName: string;
   currentUserRole?: UserRole;
+  currentUser?: UserAccount | null;
   warehouseHeadDefaultName?: string;
   onClose: () => void;
   onApprove: (handoverData: {
@@ -44,6 +53,7 @@ interface ApprovalModalProps {
       issuedQty: number;
       isCancelled: boolean;
       barcodeScanned?: boolean;
+      sourceLocation?: string;
     }[];
   }) => { success: boolean; voucher?: IssueVoucherDocument; error?: string };
   onReject: (reason: string) => void;
@@ -60,6 +70,7 @@ interface ItemHandoverState {
   isCancelled: boolean; // Centang barang tidak jadi dikeluarkan (qty = 0)
   barcodeValidated: boolean; // Hasil validasi scan barcode
   barcodeScannedAt?: string;
+  sourceLocation: string; // Lokasi rak tempat barang fisik diambil saat validasi
 }
 
 export const ApprovalModal: React.FC<ApprovalModalProps> = ({
@@ -67,6 +78,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
   stockItems,
   currentAdminName,
   currentUserRole = 'admin',
+  currentUser,
   warehouseHeadDefaultName = 'Suryadi',
   onClose,
   onApprove,
@@ -76,17 +88,18 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
 }) => {
   if (!voucher) return null;
 
-  // Prosedur Resmi SIV:
-  // 1. Status 'PENDING': Tahap Validasi oleh User Admin Gudang
-  //    -> Admin Gudang meng-ACC SIV, validasi scan barcode barang & isi qty barang yang diserahkan.
-  //    -> SIV terkunci (pemohon tidak bisa edit/hapus), tetapi stock fisik BELUM berubah.
-  // 2. Status 'APPROVED': Tahap Verifikasi Pengeluaran Stock oleh User Kepala Gudang
-  //    -> Kepala Gudang memverifikasi pengeluaran stock yang dilakukan Admin Gudang dan OTOMATIS mempengaruhi stock.
   const isAdminValidationStage = voucher.status === 'PENDING';
   const isHeadVerificationStage = voucher.status === 'APPROVED';
 
-  const canPerformAdminValidation = currentUserRole === 'admin';
-  const canPerformHeadApproval = currentUserRole === 'kepala_gudang';
+  const perms = currentUser ? getEffectivePermissions(currentUser) : null;
+  const canPerformAdminValidation = perms
+    ? perms.canValidateSIV
+    : currentUserRole === 'superuser' ||
+      currentUserRole === 'kepala_gudang' ||
+      currentUserRole === 'admin';
+  const canPerformHeadApproval = perms
+    ? perms.canApproveSIVStockDeduction
+    : currentUserRole === 'superuser' || currentUserRole === 'kepala_gudang';
 
   // State untuk Tahap Admin Gudang (ACC SIV & Validasi Barang/Qty)
   const [recipientName, setRecipientName] = useState(
@@ -113,24 +126,36 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
 
   const barcodeInputRef = useRef<HTMLInputElement>(null);
 
+  const { storageLocations } = useInventory();
+
   const [itemsState, setItemsState] = useState<ItemHandoverState[]>(() =>
-    voucher.items.map((it) => ({
-      itemId: it.itemId,
-      sku: it.sku,
-      itemName: it.itemName,
-      unit: it.unit,
-      requestedQty: it.requestedQty,
-      issuedQty:
-        it.issuedQty !== undefined
-          ? it.issuedQty
-          : it.approvedQty !== undefined
-          ? it.approvedQty
-          : it.requestedQty,
-      isCancelled: it.isCancelled || false,
-      barcodeValidated: it.barcodeValidated || false,
-      barcodeScannedAt: it.barcodeScannedAt,
-    }))
+    voucher.items.map((it) => {
+      const stockObj = stockItems.find((s) => s.id === it.itemId || s.sku === it.sku);
+      return {
+        itemId: it.itemId,
+        sku: it.sku,
+        itemName: it.itemName,
+        unit: it.unit,
+        requestedQty: it.requestedQty,
+        issuedQty:
+          it.issuedQty !== undefined
+            ? it.issuedQty
+            : it.approvedQty !== undefined
+            ? it.approvedQty
+            : it.requestedQty,
+        isCancelled: it.isCancelled || false,
+        barcodeValidated: it.barcodeValidated || false,
+        barcodeScannedAt: it.barcodeScannedAt,
+        sourceLocation: it.sourceLocation || stockObj?.location || 'Store Utama',
+      };
+    })
   );
+
+  const handleSourceLocationChange = (index: number, newLocation: string) => {
+    setItemsState((prev) =>
+      prev.map((item, idx) => (idx === index ? { ...item, sourceLocation: newLocation } : item))
+    );
+  };
 
   const [isRejecting, setIsRejecting] = useState(false);
   const [rejectionReason, setRejectionReason] = useState('');
@@ -297,6 +322,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
           issuedQty: i.isCancelled ? 0 : i.issuedQty,
           isCancelled: i.isCancelled || i.issuedQty === 0,
           barcodeScanned: i.barcodeValidated,
+          sourceLocation: i.sourceLocation,
         })),
       });
 
@@ -516,7 +542,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                       type="text"
                       value={barcodeInput}
                       onChange={(e) => setBarcodeInput(e.target.value)}
-                      placeholder="Arahkan scanner barcode atau ketik Kode Material / SKU (contoh: SKU-SPR-001) lalu tekan Enter..."
+                      placeholder="Arahkan scanner barcode atau ketik Material Code (contoh: SKU-SPR-001) lalu tekan Enter..."
                       className="w-full pl-9 pr-3 py-2 bg-slate-900 border border-blue-700 rounded-lg text-xs text-white placeholder-slate-400 font-mono focus:ring-2 focus:ring-blue-400 focus:outline-hidden"
                     />
                   </div>
@@ -565,6 +591,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                         <th className="px-2.5 py-2.5 text-center">Stok Rak</th>
                         <th className="px-2.5 py-2.5 text-center">Diminta</th>
                         <th className="px-3 py-2.5 text-center">Validasi Barcode</th>
+                        <th className="px-3 py-2.5 text-center">Lokasi Ambil Fisik</th>
                         <th className="px-3 py-2.5 text-center w-36">Qty Diserahkan</th>
                         <th className="px-3 py-2.5 text-center">Tidak Jadi Dikeluarkan</th>
                         <th className="px-2.5 py-2.5 text-center">Status PDF SIV</th>
@@ -647,6 +674,51 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                                   <ScanBarcode className="w-3.5 h-3.5" />
                                   <span>Scan Barcode</span>
                                 </button>
+                              )}
+                            </td>
+
+                            {/* Verifikasi Lokasi Pengambilan Fisik (1 barang dapat di beberapa lokasi rak) */}
+                            <td className="px-2.5 py-2.5 text-center">
+                              {isZeroOrCancelled ? (
+                                <span className="text-[10px] text-slate-400 font-mono">-</span>
+                              ) : (
+                                <div className="inline-flex flex-col items-center gap-0.5">
+                                  <select
+                                    value={row.sourceLocation}
+                                    onChange={(e) => handleSourceLocationChange(idx, e.target.value)}
+                                    className="px-2 py-1 bg-white border border-slate-300 text-slate-900 rounded-lg text-[11px] font-semibold focus:ring-1 focus:ring-blue-600 focus:outline-hidden max-w-[130px]"
+                                    title="Verifikasi lokasi rak fisik tempat barang diambil"
+                                  >
+                                    {stockObj?.location && (
+                                      <option value={stockObj.location}>
+                                        {stockObj.location} (Utama)
+                                      </option>
+                                    )}
+                                    {stockObj?.locations
+                                      ?.filter((loc) => loc !== stockObj.location)
+                                      .map((loc) => (
+                                        <option key={loc} value={loc}>
+                                          {loc}
+                                        </option>
+                                      ))}
+                                    {storageLocations
+                                      .filter(
+                                        (l) =>
+                                          l.code !== stockObj?.location &&
+                                          !(stockObj?.locations || []).includes(l.code)
+                                      )
+                                      .map((l) => (
+                                        <option key={l.code} value={l.code}>
+                                          {l.code}
+                                        </option>
+                                      ))}
+                                  </select>
+                                  {stockObj?.locations && stockObj.locations.length > 1 && (
+                                    <span className="text-[9px] font-mono text-indigo-600 font-bold">
+                                      Multi-Lokasi ({stockObj.locations.length})
+                                    </span>
+                                  )}
+                                </div>
                               )}
                             </td>
 
@@ -804,7 +876,7 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                   <table className="w-full text-xs text-left">
                     <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                       <tr>
-                        <th className="px-3 py-2.5">Barang &amp; SKU</th>
+                        <th className="px-3 py-2.5">Barang &amp; Material Code</th>
                         <th className="px-3 py-2.5 text-center">Stok Rak Saat Ini</th>
                         <th className="px-3 py-2.5 text-right">Qty Diminta</th>
                         <th className="px-3 py-2.5 text-right">Qty Diserahkan (Validasi Admin)</th>
@@ -833,7 +905,13 @@ export const ApprovalModal: React.FC<ApprovalModalProps> = ({
                               <div className={`font-semibold ${isCancelledItem ? 'line-through text-slate-400' : 'text-slate-900'}`}>
                                 {item.itemName}
                               </div>
-                              <div className="text-[11px] font-mono text-slate-500">{item.sku}</div>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="text-[11px] font-mono text-slate-500">{item.sku}</span>
+                                <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded bg-indigo-50 border border-indigo-200 text-indigo-700 font-mono text-[9.5px]">
+                                  <MapPin className="w-2.5 h-2.5" />
+                                  <span>{item.sourceLocation || currentItem?.location || 'Store Utama'}</span>
+                                </span>
+                              </div>
                             </td>
                             <td className="px-3 py-2.5 text-center font-mono tabular-nums text-slate-700">
                               {currentStock} {item.unit}

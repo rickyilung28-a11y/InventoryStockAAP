@@ -1,21 +1,51 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { fileURLToPath } from 'url';
+import { defineConfig, Plugin } from 'vite';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+/**
+ * Prevents @vite/client from throwing "Error: WebSocket closed without opened."
+ * when running inside a Cloud Run / container proxy with HMR disabled.
+ */
+function disableViteClientWebSocketPlugin(): Plugin {
+  return {
+    name: 'disable-vite-client-websocket',
+    enforce: 'pre',
+    transform(code, id) {
+      if (id.includes('vite/dist/client/client.mjs')) {
+        return code
+          .replace(
+            'transport.connect(createHMRHandler(handleMessage));',
+            '/* HMR WebSocket disabled in container environment */'
+          )
+          .replace(
+            'setupForwardConsoleHandler(transport, forwardConsole);',
+            '/* Forward console disabled */'
+          );
+      }
+      return null;
+    },
+  };
+}
 
 export default defineConfig(() => {
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [
+      disableViteClientWebSocketPlugin(),
+      react(),
+      tailwindcss(),
+    ],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
+      allowedHosts: true as true,
+      hmr: false,
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

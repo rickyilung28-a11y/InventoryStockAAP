@@ -156,7 +156,7 @@ export const PrintStockLedgerModal: React.FC<PrintStockLedgerModalProps> = ({
       [
         'No',
         'Tanggal & Waktu',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Tipe Aliran',
         'Stock Awal',
@@ -520,7 +520,7 @@ export const PrintStockLedgerModal: React.FC<PrintStockLedgerModalProps> = ({
                   <th className="border-r border-slate-900 px-2.5 py-2 text-center w-10">No</th>
                   <th className="border-r border-slate-900 px-3 py-2 text-center w-32">Tanggal</th>
                   {!selectedSku && (
-                    <th className="border-r border-slate-900 px-3 py-2">Nama Barang &amp; SKU</th>
+                    <th className="border-r border-slate-900 px-3 py-2">Nama Barang &amp; Material Code</th>
                   )}
                   <th className="border-r border-slate-900 px-3 py-2 text-right w-24">
                     Stock Awal

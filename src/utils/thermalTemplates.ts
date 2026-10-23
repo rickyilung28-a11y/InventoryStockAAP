@@ -10,9 +10,11 @@ export interface LabelPageSize {
 
 export interface ThermalDesignSettings {
   // Paper & layout
-  paddingMm: number; // 1 to 4mm
+  paddingMm: number; // 0.5 to 4mm
   borderStyle: 'none' | 'thin' | 'bold' | 'double' | 'rounded';
   contentAlign: 'left' | 'center';
+  fitToPaper?: boolean; // Automatically scales content to fit inside paper dimensions without clipping
+  paperPrintMode?: 'thermal_roll' | 'a4_sheet'; // Print on 1-by-1 thermal roll or fit multiple labels onto A4 paper
 
   // Header
   showHeader: boolean;
@@ -22,6 +24,7 @@ export interface ThermalDesignSettings {
   headerFontSize: 'xs' | 'sm' | 'base';
 
   // Primary Code (SKU or Rack Code)
+  showPrimaryCode?: boolean; // Toggle primary SKU / Rack code text
   titleFontSize: 'sm' | 'base' | 'lg' | 'xl' | '2xl';
   titleFontWeight: 'normal' | 'bold' | 'black';
 
@@ -31,19 +34,22 @@ export interface ThermalDesignSettings {
   nameMaxLines: 1 | 2;
 
   // Barcode / QR Code
+  showBarcodeGraphic?: boolean; // Toggle barcode/QR graphic
   barcodeType: 'code128' | 'qrcode';
-  barcodeHeight: number; // in pixels (e.g. 18 to 48)
+  barcodeHeight: number; // in pixels (e.g. 18 to 54)
   showBarcodeText: boolean;
 
-  // Optional Metadata Badges
+  // Optional Metadata Badges (Pilihan apa saja yang ditampilkan di label)
   showLocation: boolean; // For Items: shows rack location
   showCategory: boolean; // For Items: shows category
   showStock: boolean; // For Items: shows current stock & unit
-  showSafetyStock: boolean; // For Items: shows minimum safety stock
+  showSafetyStock: boolean; // For Items: shows minimum safety stock (Stok Min)
+  showUnit?: boolean; // For Items: shows unit badge (Pcs, Liter, Box)
   showZone: boolean; // For Racks: shows zone / area
-  showDescription: boolean; // For Racks: shows description
+  showDescription: boolean; // For Items & Racks: shows description / specs
 
   // Footer
+  showFooter?: boolean; // Toggle bottom footer bar
   showDate: boolean;
   customFooterText: string;
 }
@@ -85,7 +91,7 @@ export const PRESET_LABEL_SIZES: LabelPageSize[] = [
   },
   {
     id: '70x50',
-    name: '70 x 50 mm (Label Besar Palet & Gudang)',
+    name: '70 x 50 mm (Label Besar Palet & Store)',
     widthMm: 70,
     heightMm: 50,
     orientation: 'landscape',
@@ -125,25 +131,31 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 1.5,
       borderStyle: 'thin',
       contentAlign: 'center',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: true,
       headerType: 'company_name',
       customHeaderText: '',
       showLogo: true,
       headerFontSize: 'xs',
+      showPrimaryCode: true,
       titleFontSize: 'lg',
       titleFontWeight: 'black',
       showName: true,
       nameFontSize: 'xs',
       nameMaxLines: 1,
+      showBarcodeGraphic: true,
       barcodeType: 'code128',
-      barcodeHeight: 30,
+      barcodeHeight: 28,
       showBarcodeText: true,
       showLocation: true,
       showCategory: true,
       showStock: false,
-      showSafetyStock: false,
+      showSafetyStock: true,
+      showUnit: false,
       showZone: true,
-      showDescription: true,
+      showDescription: false,
+      showFooter: true,
       showDate: false,
       customFooterText: '',
     },
@@ -166,25 +178,31 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 1.5,
       borderStyle: 'bold',
       contentAlign: 'center',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: true,
       headerType: 'inverted_bar',
-      customHeaderText: 'LOGISTIK & INVENTARIS GUDANG',
+      customHeaderText: 'LOGISTIK & INVENTARIS STORE',
       showLogo: false,
       headerFontSize: 'xs',
+      showPrimaryCode: true,
       titleFontSize: 'xl',
       titleFontWeight: 'black',
       showName: true,
       nameFontSize: 'xs',
       nameMaxLines: 1,
+      showBarcodeGraphic: true,
       barcodeType: 'code128',
-      barcodeHeight: 28,
+      barcodeHeight: 26,
       showBarcodeText: true,
       showLocation: true,
       showCategory: false,
       showStock: false,
       showSafetyStock: false,
+      showUnit: false,
       showZone: true,
       showDescription: false,
+      showFooter: true,
       showDate: true,
       customFooterText: '',
     },
@@ -207,25 +225,31 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 1.5,
       borderStyle: 'rounded',
       contentAlign: 'left',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: true,
       headerType: 'company_name',
       customHeaderText: '',
       showLogo: false,
       headerFontSize: 'xs',
+      showPrimaryCode: true,
       titleFontSize: 'base',
       titleFontWeight: 'black',
       showName: true,
       nameFontSize: 'xs',
       nameMaxLines: 2,
+      showBarcodeGraphic: true,
       barcodeType: 'qrcode',
-      barcodeHeight: 40,
+      barcodeHeight: 38,
       showBarcodeText: true,
       showLocation: true,
       showCategory: true,
       showStock: false,
       showSafetyStock: false,
+      showUnit: false,
       showZone: true,
       showDescription: false,
+      showFooter: true,
       showDate: false,
       customFooterText: '',
     },
@@ -248,27 +272,33 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 2,
       borderStyle: 'thin',
       contentAlign: 'center',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: true,
       headerType: 'company_name',
       customHeaderText: '',
       showLogo: true,
       headerFontSize: 'sm',
+      showPrimaryCode: true,
       titleFontSize: 'xl',
       titleFontWeight: 'black',
       showName: true,
       nameFontSize: 'sm',
       nameMaxLines: 2,
+      showBarcodeGraphic: true,
       barcodeType: 'code128',
-      barcodeHeight: 36,
+      barcodeHeight: 34,
       showBarcodeText: true,
       showLocation: true,
       showCategory: true,
       showStock: true,
       showSafetyStock: true,
+      showUnit: true,
       showZone: true,
       showDescription: true,
+      showFooter: true,
       showDate: true,
-      customFooterText: 'QC PASSED & GUDANG RESMI',
+      customFooterText: 'QC PASSED & STORE RESMI',
     },
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -280,7 +310,7 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
     isBuiltIn: true,
     pageSize: {
       id: '70x50',
-      name: '70 x 50 mm (Label Besar Palet & Gudang)',
+      name: '70 x 50 mm (Label Besar Palet & Store)',
       widthMm: 70,
       heightMm: 50,
       orientation: 'landscape',
@@ -289,25 +319,31 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 2.5,
       borderStyle: 'bold',
       contentAlign: 'center',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: true,
       headerType: 'inverted_bar',
-      customHeaderText: 'POSISI RAK PENYIMPANAN LOGISTIK',
+      customHeaderText: 'POSISI RAK PENYIMPANAN STORE',
       showLogo: true,
       headerFontSize: 'sm',
+      showPrimaryCode: true,
       titleFontSize: '2xl',
       titleFontWeight: 'black',
       showName: true,
       nameFontSize: 'base',
       nameMaxLines: 1,
+      showBarcodeGraphic: true,
       barcodeType: 'code128',
-      barcodeHeight: 45,
+      barcodeHeight: 42,
       showBarcodeText: true,
       showLocation: true,
       showCategory: true,
       showStock: false,
       showSafetyStock: false,
+      showUnit: false,
       showZone: true,
       showDescription: true,
+      showFooter: true,
       showDate: true,
       customFooterText: 'JAGA KEBERSIHAN & KETERTIBAN RAK',
     },
@@ -330,25 +366,31 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
       paddingMm: 1,
       borderStyle: 'none',
       contentAlign: 'center',
+      fitToPaper: true,
+      paperPrintMode: 'thermal_roll',
       showHeader: false,
       headerType: 'company_name',
       customHeaderText: '',
       showLogo: false,
       headerFontSize: 'xs',
+      showPrimaryCode: true,
       titleFontSize: 'sm',
       titleFontWeight: 'bold',
       showName: false,
       nameFontSize: 'xs',
       nameMaxLines: 1,
+      showBarcodeGraphic: true,
       barcodeType: 'code128',
-      barcodeHeight: 20,
+      barcodeHeight: 18,
       showBarcodeText: true,
       showLocation: false,
       showCategory: false,
       showStock: false,
       showSafetyStock: false,
+      showUnit: false,
       showZone: false,
       showDescription: false,
+      showFooter: false,
       showDate: false,
       customFooterText: '',
     },
@@ -358,6 +400,89 @@ export const BUILTIN_TEMPLATES: ThermalLabelTemplate[] = [
 ];
 
 const LOCAL_STORAGE_KEY = 'inventaris_thermal_templates_v1';
+
+/**
+ * Helper to compute optimal design parameters for a given paper size ("Fit to Paper")
+ */
+export function computeAutoFitDesignForPaper(
+  widthMm: number,
+  heightMm: number,
+  orientation: 'landscape' | 'portrait',
+  currentDesign: ThermalDesignSettings
+): ThermalDesignSettings {
+  const effectiveW = orientation === 'landscape' ? widthMm : heightMm;
+  const effectiveH = orientation === 'landscape' ? heightMm : widthMm;
+
+  // Count how many vertical sections are active
+  const activeBadgesCount = [
+    currentDesign.showLocation,
+    currentDesign.showCategory,
+    currentDesign.showStock,
+    currentDesign.showSafetyStock,
+    currentDesign.showUnit,
+    currentDesign.showZone,
+    currentDesign.showDescription,
+  ].filter(Boolean).length;
+
+  const hasFooter =
+    currentDesign.showFooter !== false &&
+    (activeBadgesCount > 0 || currentDesign.showDate || Boolean(currentDesign.customFooterText));
+
+  if (effectiveH <= 22 || effectiveW <= 34) {
+    // Micro label (e.g., 30x20mm)
+    return {
+      ...currentDesign,
+      fitToPaper: true,
+      paddingMm: 0.8,
+      headerFontSize: 'xs',
+      titleFontSize: 'sm',
+      nameFontSize: 'xs',
+      nameMaxLines: 1,
+      barcodeHeight: currentDesign.showHeader ? 16 : 20,
+    };
+  }
+
+  if (effectiveH <= 32 || effectiveW <= 45) {
+    // Small/Standard label (e.g., 40x30mm, 50x30mm)
+    const dense = currentDesign.showHeader && currentDesign.showName && hasFooter;
+    return {
+      ...currentDesign,
+      fitToPaper: true,
+      paddingMm: dense ? 1.0 : 1.5,
+      headerFontSize: 'xs',
+      titleFontSize: effectiveW >= 48 ? 'base' : 'sm',
+      nameFontSize: 'xs',
+      nameMaxLines: 1,
+      barcodeHeight: dense ? 22 : 28,
+    };
+  }
+
+  if (effectiveH <= 42) {
+    // Medium label (e.g., 60x40mm)
+    return {
+      ...currentDesign,
+      fitToPaper: true,
+      paddingMm: 1.8,
+      headerFontSize: 'xs',
+      titleFontSize: 'lg',
+      nameFontSize: 'xs',
+      nameMaxLines: 2,
+      barcodeHeight: 32,
+    };
+  }
+
+  // Large label (e.g., 70x50mm, 80x50mm+)
+  return {
+    ...currentDesign,
+    fitToPaper: true,
+    paddingMm: 2.2,
+    headerFontSize: 'sm',
+    titleFontSize: 'xl',
+    nameFontSize: 'sm',
+    nameMaxLines: 2,
+    barcodeHeight: 40,
+  };
+}
 
 /**
  * Load all thermal templates combining built-ins with user-customized saved templates.
@@ -372,7 +497,6 @@ export function getSavedThermalTemplates(): ThermalLabelTemplate[] {
     if (!Array.isArray(customList)) {
       return BUILTIN_TEMPLATES;
     }
-    // Return built-ins followed by custom templates
     return [...BUILTIN_TEMPLATES, ...customList];
   } catch (err) {
     console.error('Failed to load saved thermal templates', err);

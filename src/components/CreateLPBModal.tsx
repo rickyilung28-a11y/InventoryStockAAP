@@ -1,24 +1,32 @@
-import React, { useState, useRef } from 'react';
-import { StockItem, LPBDocument } from '../types/inventory';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { StockItem, LPBItem, LPBDocument } from '../types/inventory';
 import { useInventory } from '../context/InventoryContext';
 import { ItemPickerModal } from './ItemPickerModal';
+import { BarcodeAddScannerPanel } from './BarcodeAddScannerPanel';
 import {
   Plus,
   Trash2,
-  FileCheck,
+  PackageCheck,
   X,
-  AlertTriangle,
-  Truck,
-  Layers,
+  AlertCircle,
+  Boxes,
+  MapPin,
+  Target,
   ScanBarcode,
   CheckCircle2,
-  Sparkles,
-  QrCode,
-  ShieldCheck,
+  Camera,
+  CameraOff,
+  Check,
+  Volume2,
+  Search,
+  RefreshCw,
+  Minus,
+  PackagePlus,
 } from 'lucide-react';
 
 interface CreateLPBModalProps {
   stockItems: StockItem[];
+  currentUser?: { name: string };
   onClose: () => void;
   onSubmit: (data: {
     sjNumber: string;
@@ -31,27 +39,25 @@ interface CreateLPBModalProps {
     usagePurpose?: string;
     storageLocation?: string;
     notes?: string;
-    items: {
-      itemId: string;
-      quantity: number;
-      batchNo?: string;
-      condition: 'Baik' | 'Kurang' | 'Rusak';
-      notes?: string;
-      storageLocation?: string;
-      barcodeValidated?: boolean;
-      barcodeScannedAt?: string;
-    }[];
+    items: Omit<LPBItem, 'sku' | 'itemName' | 'unit'>[];
   }) => LPBDocument;
   onSuccessPrint: (doc: LPBDocument) => void;
 }
 
 export const CreateLPBModal: React.FC<CreateLPBModalProps> = ({
   stockItems,
+  currentUser: propCurrentUser,
   onClose,
   onSubmit,
   onSuccessPrint,
 }) => {
-  const { storageLocations, currentUser } = useInventory();
+  const {
+    currentUser: ctxCurrentUser,
+    storageLocations,
+    addStorageLocation,
+    addNewStockItem,
+  } = useInventory();
+  const activeUserName = propCurrentUser?.name || ctxCurrentUser?.name || 'Admin Store';
   const today = new Date().toISOString().split('T')[0];
 
   const [sjNumber, setSjNumber] = useState('');
@@ -61,16 +67,40 @@ export const CreateLPBModal: React.FC<CreateLPBModalProps> = ({
   const [poNumber, setPoNumber] = useState('');
   const [driverName, setDriverName] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
-  const [usagePurpose, setUsagePurpose] = useState('Persediaan Gudang & Produksi');
+  const [usagePurpose, setUsagePurpose] = useState('Pemenuhan Stok Logistik Gudang');
+  const [defaultStorageLocation, setDefaultStorageLocation] = useState(
+    stockItems[0]?.location || storageLocations[0]?.code || 'Rak A-01'
+  );
   const [notes, setNotes] = useState('');
 
-  // Barcode scan validation state for Admin Gudang
-  const [barcodeInput, setBarcodeInput] = useState('');
-  const [scanFeedback, setScanFeedback] = useState<{
-    type: 'success' | 'error';
-    text: string;
-  } | null>(null);
-  const barcodeInputRef = useRef<HTMLInputElement>(null);
+  // Quick add new rack inline
+  const [showAddLocInline, setShowAddLocInline] = useState(false);
+  const [newLocCode, setNewLocCode] = useState('');
+  const [newLocName, setNewLocName] = useState('');
+
+  const availableLocations = useMemo(() => {
+    return Array.from(
+      new Set([
+        ...storageLocations.map((l) => l.code),
+        ...stockItems.map((i) => i.location).filter(Boolean),
+      ])
+    ).sort();
+  }, [storageLocations, stockItems]);
+
+  const handleQuickAddLocation = () => {
+    if (!newLocCode.trim()) return;
+    const res = addStorageLocation({
+      code: newLocCode.trim(),
+      name: newLocName.trim() || `Area Simpan ${newLocCode.trim()}`,
+      zone: 'Zona Gudang',
+    });
+    if (res.success && res.location) {
+      setDefaultStorageLocation(res.location.code);
+      setNewLocCode('');
+      setNewLocName('');
+      setShowAddLocInline(false);
+    }
+  };
 
   const [items, setItems] = useState<
     Array<{
@@ -82,198 +112,503 @@ export const CreateLPBModal: React.FC<CreateLPBModalProps> = ({
       storageLocation: string;
       barcodeValidated: boolean;
       barcodeScannedAt?: string;
+      scanInputText: string;
     }>
-  >([
-    {
-      itemId: stockItems[0]?.id || '',
-      quantity: 10,
-      batchNo: '',
-      condition: 'Baik',
-      notes: '',
-      storageLocation: stockItems[0]?.location || storageLocations[0]?.code || 'Rak A-01',
-      barcodeValidated: false,
-    },
-  ]);
+  >(() =>
+    stockItems[0]
+      ? [
+          {
+            itemId: stockItems[0].id,
+            quantity: 10,
+            batchNo: '',
+            condition: 'Baik',
+            notes: '',
+            storageLocation: stockItems[0].location || 'Rak A-01',
+            barcodeValidated: false,
+            scanInputText: '',
+          },
+        ]
+      : []
+  );
+
+  // Track if the initial row was untouched so picking from catalog/search replaces it cleanly
+  const [hasTouchedInitialRow, setHasTouchedInitialRow] = useState(false);
 
   const [errorMsg, setErrorMsg] = useState('');
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [replacingRowIndex, setReplacingRowIndex] = useState<number | null>(null);
+
+  // Quick Search & Add Bar State
+  const [quickSearchText, setQuickSearchText] = useState('');
+  const [quickSearchQty, setQuickSearchQty] = useState(10);
+  const [showQuickDropdown, setShowQuickDropdown] = useState(false);
+  const [showBarcodeAddScanner, setShowBarcodeAddScanner] = useState(false);
+
+  // Quick New Master Item Inline Modal/Panel
+  const [showQuickNewMaster, setShowQuickNewMaster] = useState(false);
+  const [newMasterSku, setNewMasterSku] = useState('');
+  const [newMasterName, setNewMasterName] = useState('');
+  const [newMasterCategory, setNewMasterCategory] = useState('Sparepart Mesin');
+  const [newMasterUnit, setNewMasterUnit] = useState('Pcs');
+  const [newMasterMinStock, setNewMasterMinStock] = useState(5);
+  const [newMasterLocation, setNewMasterLocation] = useState(defaultStorageLocation || 'Rak A-01');
+  const [newMasterReceiveQty, setNewMasterReceiveQty] = useState(10);
+
+  // Camera Scanner State for LPB Item
+  const [activeCameraRowIdx, setActiveCameraRowIdx] = useState<number | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [lastCameraScanInfo, setLastCameraScanInfo] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<number | null>(null);
+
+  const playBeep = () => {
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1046.5, ctx.currentTime);
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.12);
+    } catch {
+      // ignore audio error
+    }
+  };
+
+  const stopCameraScanner = () => {
+    if (scanIntervalRef.current) {
+      window.clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  useEffect(() => {
+    if (activeCameraRowIdx === null) {
+      stopCameraScanner();
+      return;
+    }
+
+    let isMounted = true;
+    setCameraError(null);
+    setLastCameraScanInfo(null);
+
+    const startCamera = async () => {
+      stopCameraScanner();
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError(
+          'Browser tidak mendukung akses kamera. Gunakan tombol Simulasi Scan atau ketik Material Code manual.'
+        );
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false,
+        });
+        if (!isMounted) {
+          stream.getTracks().forEach((t) => t.stop());
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => {});
+        }
+
+        const BarcodeDetectorClass = (
+          window as unknown as {
+            BarcodeDetector?: new (opts?: { formats: string[] }) => {
+              detect: (el: HTMLVideoElement) => Promise<Array<{ rawValue: string }>>;
+            };
+          }
+        ).BarcodeDetector;
+
+        if (BarcodeDetectorClass) {
+          const detector = new BarcodeDetectorClass({
+            formats: ['code_128', 'code_39', 'ean_13', 'ean_8', 'qr_code', 'upc_a'],
+          });
+
+          scanIntervalRef.current = window.setInterval(async () => {
+            if (!videoRef.current || videoRef.current.readyState < 2) return;
+            try {
+              const barcodes = await detector.detect(videoRef.current);
+              if (barcodes.length > 0 && barcodes[0].rawValue) {
+                const cleaned = barcodes[0].rawValue.trim().toUpperCase();
+                setLastCameraScanInfo(`Terbaca: ${cleaned}`);
+
+                const targetRow = items[activeCameraRowIdx];
+                const expectedStock = stockItems.find((s) => s.id === targetRow?.itemId);
+
+                if (
+                  expectedStock &&
+                  (cleaned === expectedStock.sku.toUpperCase() ||
+                    cleaned.includes(expectedStock.sku.toUpperCase()))
+                ) {
+                  playBeep();
+                  setItems((prev) =>
+                    prev.map((row, i) =>
+                      i === activeCameraRowIdx
+                        ? {
+                            ...row,
+                            barcodeValidated: true,
+                            barcodeScannedAt: new Date().toISOString(),
+                            scanInputText: expectedStock.sku,
+                          }
+                        : row
+                    )
+                  );
+                  setErrorMsg('');
+                  setActiveCameraRowIdx(null);
+                }
+              }
+            } catch {
+              // ignore frame detection error
+            }
+          }, 300);
+        }
+      } catch {
+        if (isMounted) {
+          setCameraError(
+            'Kamera tidak dapat diakses pada perangkat ini. Gunakan tombol Simulasi Scan atau ketik Material Code manual.'
+          );
+        }
+      }
+    };
+
+    startCamera();
+    return () => {
+      isMounted = false;
+      stopCameraScanner();
+    };
+  }, [activeCameraRowIdx]);
+
+  // Quick Search Filtered Results
+  const quickSearchResults = useMemo(() => {
+    if (!quickSearchText.trim()) return [];
+    const q = quickSearchText.toLowerCase();
+    return stockItems
+      .filter(
+        (item) =>
+          item.sku.toLowerCase().includes(q) ||
+          item.name.toLowerCase().includes(q) ||
+          item.category.toLowerCase().includes(q) ||
+          item.location.toLowerCase().includes(q)
+      )
+      .slice(0, 8);
+  }, [stockItems, quickSearchText]);
+
+  // Helper to add or merge an item into LPB items list
+  const addOrMergeItemToLPB = (
+    selectedItem: StockItem,
+    addedQty: number,
+    replaceIdx: number | null = null,
+    isFromBarcodeScan = false
+  ) => {
+    const cleanQty = Math.max(1, Number(addedQty) || 1);
+    const nowIso = new Date().toISOString();
+    setErrorMsg('');
+
+    setItems((prev) => {
+      // Case 1: Replacing a specific row
+      if (replaceIdx !== null && replaceIdx >= 0 && replaceIdx < prev.length) {
+        const otherIdx = prev.findIndex(
+          (r, idx) => idx !== replaceIdx && r.itemId === selectedItem.id
+        );
+        if (otherIdx >= 0) {
+          return prev
+            .map((r, idx) =>
+              idx === otherIdx
+                ? {
+                    ...r,
+                    quantity: r.quantity + cleanQty,
+                    barcodeValidated: isFromBarcodeScan ? true : r.barcodeValidated,
+                    barcodeScannedAt: isFromBarcodeScan ? nowIso : r.barcodeScannedAt,
+                    scanInputText: isFromBarcodeScan ? selectedItem.sku : r.scanInputText,
+                  }
+                : r
+            )
+            .filter((_, idx) => idx !== replaceIdx);
+        }
+        return prev.map((r, idx) =>
+          idx === replaceIdx
+            ? {
+                ...r,
+                itemId: selectedItem.id,
+                quantity: cleanQty,
+                storageLocation: selectedItem.location || defaultStorageLocation,
+                barcodeValidated: isFromBarcodeScan,
+                barcodeScannedAt: isFromBarcodeScan ? nowIso : undefined,
+                scanInputText: isFromBarcodeScan ? selectedItem.sku : '',
+              }
+            : r
+        );
+      }
+
+      // Case 2: If the initial default row is untouched and user picks a different item first
+      if (
+        !hasTouchedInitialRow &&
+        prev.length === 1 &&
+        !prev[0].barcodeValidated &&
+        prev[0].itemId !== selectedItem.id
+      ) {
+        setHasTouchedInitialRow(true);
+        return [
+          {
+            itemId: selectedItem.id,
+            quantity: cleanQty,
+            batchNo: '',
+            condition: 'Baik',
+            notes: '',
+            storageLocation: selectedItem.location || defaultStorageLocation,
+            barcodeValidated: isFromBarcodeScan,
+            barcodeScannedAt: isFromBarcodeScan ? nowIso : undefined,
+            scanInputText: isFromBarcodeScan ? selectedItem.sku : '',
+          },
+        ];
+      }
+
+      setHasTouchedInitialRow(true);
+
+      // Case 3: Item already exists in LPB -> add quantity
+      const existingIdx = prev.findIndex((i) => i.itemId === selectedItem.id);
+      if (existingIdx >= 0) {
+        return prev.map((it, idx) =>
+          idx === existingIdx
+            ? {
+                ...it,
+                quantity: it.quantity + cleanQty,
+                barcodeValidated: isFromBarcodeScan ? true : it.barcodeValidated,
+                barcodeScannedAt: isFromBarcodeScan ? nowIso : it.barcodeScannedAt,
+                scanInputText: isFromBarcodeScan ? selectedItem.sku : it.scanInputText,
+              }
+            : it
+        );
+      }
+
+      // Case 4: Append new row
+      return [
+        ...prev,
+        {
+          itemId: selectedItem.id,
+          quantity: cleanQty,
+          batchNo: '',
+          condition: 'Baik',
+          notes: '',
+          storageLocation: selectedItem.location || defaultStorageLocation,
+          barcodeValidated: isFromBarcodeScan,
+          barcodeScannedAt: isFromBarcodeScan ? nowIso : undefined,
+          scanInputText: isFromBarcodeScan ? selectedItem.sku : '',
+        },
+      ];
+    });
+  };
 
   const handleAddItemRow = () => {
-    const firstItem = stockItems[0];
+    setHasTouchedInitialRow(true);
+    setErrorMsg('');
+
+    const usedIds = new Set(items.map((i) => i.itemId));
+    const nextAvailableItem = stockItems.find((s) => !usedIds.has(s.id)) || stockItems[0];
+
+    if (!nextAvailableItem) return;
+
+    if (usedIds.has(nextAvailableItem.id)) {
+      setReplacingRowIndex(null);
+      setIsPickerOpen(true);
+      return;
+    }
+
     setItems((prev) => [
       ...prev,
       {
-        itemId: firstItem?.id || '',
+        itemId: nextAvailableItem.id,
         quantity: 1,
         batchNo: '',
         condition: 'Baik',
         notes: '',
-        storageLocation: firstItem?.location || storageLocations[0]?.code || 'Rak A-01',
+        storageLocation: nextAvailableItem.location || defaultStorageLocation,
         barcodeValidated: false,
+        scanInputText: '',
       },
     ]);
   };
 
-  const handleSelectFromPicker = (selectedItem: StockItem, qty: number) => {
-    const existing = items.findIndex((i) => i.itemId === selectedItem.id);
-    if (existing >= 0) {
-      setItems((prev) =>
-        prev.map((it, idx) =>
-          idx === existing ? { ...it, quantity: it.quantity + qty } : it
-        )
-      );
-    } else {
-      setItems((prev) => [
-        ...prev,
-        {
-          itemId: selectedItem.id,
-          quantity: qty,
-          batchNo: '',
-          condition: 'Baik',
-          notes: '',
-          storageLocation: selectedItem.location || storageLocations[0]?.code || 'Rak A-01',
-          barcodeValidated: false,
-        },
-      ]);
+  const handleOpenPickerForAdd = () => {
+    setReplacingRowIndex(null);
+    setIsPickerOpen(true);
+  };
+
+  const handleOpenPickerForReplace = (idx: number) => {
+    setHasTouchedInitialRow(true);
+    setReplacingRowIndex(idx);
+    setIsPickerOpen(true);
+  };
+
+  const handleSelectFromPicker = (selectedItem: StockItem, requestedQty: number) => {
+    addOrMergeItemToLPB(selectedItem, requestedQty, replacingRowIndex);
+  };
+
+  const handleCreateNewMasterFromPicker = (
+    newItemData: Omit<StockItem, 'id' | 'allocatedStock' | 'updatedAt'>,
+    initialReceiveQty: number
+  ) => {
+    const created = addNewStockItem(newItemData);
+    addOrMergeItemToLPB(created, initialReceiveQty, replacingRowIndex);
+  };
+
+  const handleQuickCreateNewMasterInline = () => {
+    const cleanSku = newMasterSku.trim().toUpperCase();
+    const cleanName = newMasterName.trim();
+    if (!cleanSku || !cleanName) {
+      setErrorMsg('Material Code dan Nama Barang baru wajib diisi.');
+      return;
     }
+    if (stockItems.some((s) => s.sku.toUpperCase() === cleanSku)) {
+      setErrorMsg(`Material Code "${cleanSku}" sudah terdaftar di Master Stok.`);
+      return;
+    }
+    const created = addNewStockItem({
+      sku: cleanSku,
+      name: cleanName,
+      category: newMasterCategory.trim() || 'Sparepart Mesin',
+      unit: newMasterUnit.trim() || 'Pcs',
+      currentStock: 0,
+      minStock: Math.max(0, Number(newMasterMinStock) || 0),
+      location: newMasterLocation.trim() || defaultStorageLocation || 'Rak A-01',
+      description: 'Didaftarkan saat penerimaan LPB',
+    });
+    addOrMergeItemToLPB(created, Math.max(1, Number(newMasterReceiveQty) || 1), null);
+    setNewMasterSku('');
+    setNewMasterName('');
+    setShowQuickNewMaster(false);
   };
 
   const handleRemoveItemRow = (index: number) => {
-    if (items.length <= 1) return;
+    setHasTouchedInitialRow(true);
     setItems((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const handleItemChange = (index: number, field: string, value: unknown) => {
-    setItems((prev) =>
-      prev.map((item, i) => {
-        if (i !== index) return item;
-        if (field === 'itemId') {
-          const matched = stockItems.find((s) => s.id === value);
-          return {
-            ...item,
-            itemId: value as string,
-            storageLocation: matched?.location || item.storageLocation,
-            barcodeValidated: false,
-            barcodeScannedAt: undefined,
-          };
-        }
-        return { ...item, [field]: value };
-      })
-    );
-  };
-
-  // Scan Barcode untuk Validasi Barang Masuk oleh Admin Gudang
-  const processBarcodeScan = (rawCode: string) => {
-    const code = rawCode.trim().toUpperCase();
-    if (!code) return;
     setErrorMsg('');
+  };
 
-    const matchedStock = stockItems.find(
-      (s) =>
-        s.sku.toUpperCase() === code ||
-        s.id.toUpperCase() === code ||
-        s.name.toUpperCase().includes(code)
-    );
+  const handleItemChange = (index: number, field: string, value: string | number | boolean) => {
+    setHasTouchedInitialRow(true);
+    setItems((prev) => {
+      if (field === 'itemId') {
+        const newItemId = String(value);
+        const targetStock = stockItems.find((s) => s.id === newItemId);
+        const duplicateIdx = prev.findIndex((r, idx) => idx !== index && r.itemId === newItemId);
+        if (duplicateIdx >= 0) {
+          const currentRowQty = prev[index].quantity;
+          return prev
+            .map((r, idx) =>
+              idx === duplicateIdx ? { ...r, quantity: r.quantity + currentRowQty } : r
+            )
+            .filter((_, idx) => idx !== index);
+        }
 
-    if (!matchedStock) {
-      setScanFeedback({
-        type: 'error',
-        text: `Kode Barcode "${rawCode}" tidak ditemukan di Katalog Master Barang!`,
-      });
-      return;
-    }
+        return prev.map((item, i) =>
+          i === index
+            ? {
+                ...item,
+                itemId: newItemId,
+                storageLocation:
+                  targetStock?.location || item.storageLocation || defaultStorageLocation,
+                barcodeValidated: false,
+                barcodeScannedAt: undefined,
+                scanInputText: '',
+              }
+            : item
+        );
+      }
 
-    const nowIso = new Date().toISOString();
-    const rowIdx = items.findIndex((it) => it.itemId === matchedStock.id);
+      return prev.map((item, i) => (i === index ? { ...item, [field]: value } : item));
+    });
+  };
 
-    if (rowIdx >= 0) {
+  const handleValidateBarcodeRow = (index: number, enteredCode?: string) => {
+    const row = items[index];
+    const stock = stockItems.find((s) => s.id === row.itemId);
+    if (!stock) return;
+
+    const codeToVerify = (enteredCode !== undefined ? enteredCode : row.scanInputText)
+      .trim()
+      .toUpperCase();
+    if (!codeToVerify || codeToVerify === stock.sku.toUpperCase()) {
+      setHasTouchedInitialRow(true);
       setItems((prev) =>
-        prev.map((row, i) =>
-          i === rowIdx
-            ? { ...row, barcodeValidated: true, barcodeScannedAt: nowIso }
-            : row
+        prev.map((it, idx) =>
+          idx === index
+            ? {
+                ...it,
+                barcodeValidated: true,
+                barcodeScannedAt: new Date().toISOString(),
+                scanInputText: stock.sku,
+              }
+            : it
         )
       );
-      setScanFeedback({
-        type: 'success',
-        text: `Barcode [${matchedStock.sku}] — "${matchedStock.name}" berhasil Tervalidasi oleh Admin Gudang!`,
-      });
+      setErrorMsg('');
     } else {
-      setItems((prev) => [
-        ...prev,
-        {
-          itemId: matchedStock.id,
-          quantity: 1,
-          batchNo: '',
-          condition: 'Baik',
-          notes: 'Ditambahkan & divalidasi via Scan Barcode',
-          storageLocation: matchedStock.location || 'Rak A-01',
-          barcodeValidated: true,
-          barcodeScannedAt: nowIso,
-        },
-      ]);
-      setScanFeedback({
-        type: 'success',
-        text: `Barcode [${matchedStock.sku}] — "${matchedStock.name}" otomatis ditambahkan ke daftar LPB & Tervalidasi!`,
-      });
+      setErrorMsg(
+        `Kode scan "${codeToVerify}" tidak cocok dengan Material Code barang "${stock.sku}" (${stock.name})!`
+      );
     }
-
-    setBarcodeInput('');
   };
 
-  const handleScanAllBarcodes = () => {
+  const handleValidateAllBarcodes = () => {
     const nowIso = new Date().toISOString();
+    setHasTouchedInitialRow(true);
     setItems((prev) =>
-      prev.map((row) => ({
-        ...row,
-        barcodeValidated: true,
-        barcodeScannedAt: row.barcodeScannedAt || nowIso,
-      }))
+      prev.map((it) => {
+        const st = stockItems.find((s) => s.id === it.itemId);
+        return {
+          ...it,
+          barcodeValidated: true,
+          barcodeScannedAt: it.barcodeScannedAt || nowIso,
+          scanInputText: st ? st.sku : it.scanInputText,
+        };
+      })
     );
-    setScanFeedback({
-      type: 'success',
-      text: 'Seluruh item barang masuk pada LPB ini telah divalidasi scan barcode oleh Admin Gudang.',
-    });
+    setErrorMsg('');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
 
-    if (currentUser?.role !== 'admin') {
-      setErrorMsg(
-        'Hanya User Admin Gudang yang berwenang melakukan ACC & validasi/scan barang masuk LPB.'
-      );
+    if (!sjNumber.trim() || !supplierName.trim()) {
+      setErrorMsg('Nomor Surat Jalan (SJ) dan Nama Supplier wajib diisi.');
       return;
     }
 
-    if (!sjNumber.trim()) {
-      setErrorMsg('Nomor Surat Jalan (SJ) Supplier wajib diisi.');
-      return;
-    }
-    if (!supplierName.trim()) {
-      setErrorMsg('Nama Supplier / Vendor wajib diisi.');
-      return;
-    }
     if (items.length === 0) {
-      setErrorMsg('Minimal satu barang harus dicantumkan.');
+      setErrorMsg('Minimal harus ada 1 item barang yang diterima dalam LPB.');
       return;
     }
 
-    for (let i = 0; i < items.length; i++) {
-      const itm = items[i];
-      const stockObj = stockItems.find((s) => s.id === itm.itemId);
-      if (!itm.itemId) {
-        setErrorMsg(`Pilih barang pada baris ke-${i + 1}.`);
+    for (const item of items) {
+      if (!item.itemId || item.quantity <= 0) {
+        setErrorMsg('Pastikan semua barang dipilih dan jumlah diterima lebih dari 0.');
         return;
       }
-      if (Number(itm.quantity) <= 0) {
-        setErrorMsg(`Jumlah diterima pada baris ke-${i + 1} harus lebih dari 0.`);
-        return;
-      }
-      if (!itm.barcodeValidated) {
+      if (!item.barcodeValidated) {
+        const st = stockItems.find((s) => s.id === item.itemId);
         setErrorMsg(
-          `Barang "${stockObj?.name || 'Baris ' + (i + 1)}" (${stockObj?.sku || ''}) belum divalidasi Scan Barcode! Silakan klik "Scan Barcode" atau "Simulasi Scan Semua Barcode" terlebih dahulu.`
+          `Barang "${st?.name || item.itemId}" (${st?.sku}) belum divalidasi / scan barcode oleh Admin Gudang! Silakan klik tombol Scan / Validasi Barcode terlebih dahulu.`
         );
         return;
       }
@@ -284,19 +619,19 @@ export const CreateLPBModal: React.FC<CreateLPBModalProps> = ({
       sjDate,
       supplierName: supplierName.trim(),
       receivedDate,
-      poNumber: poNumber.trim(),
-      driverName: driverName.trim(),
-      vehiclePlate: vehiclePlate.trim(),
-      usagePurpose: usagePurpose.trim(),
-      storageLocation: items[0]?.storageLocation || 'Rak A-01',
+      poNumber: poNumber.trim() || '-',
+      driverName: driverName.trim() || '-',
+      vehiclePlate: vehiclePlate.trim() || '-',
+      usagePurpose: usagePurpose.trim() || 'Pemenuhan Stok Logistik Gudang',
+      storageLocation: defaultStorageLocation,
       notes: notes.trim(),
       items: items.map((i) => ({
         itemId: i.itemId,
         quantity: Number(i.quantity),
-        batchNo: i.batchNo.trim(),
+        batchNo: i.batchNo.trim() || '-',
         condition: i.condition,
         notes: i.notes.trim(),
-        storageLocation: i.storageLocation || 'Rak A-01',
+        storageLocation: i.storageLocation || defaultStorageLocation,
         barcodeValidated: i.barcodeValidated,
         barcodeScannedAt: i.barcodeScannedAt || new Date().toISOString(),
       })),
@@ -306,390 +641,926 @@ export const CreateLPBModal: React.FC<CreateLPBModalProps> = ({
     onSuccessPrint(createdDoc);
   };
 
+  const selectedQuantitiesMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    items.forEach((i) => {
+      map[i.itemId] = (map[i.itemId] || 0) + Number(i.quantity || 0);
+    });
+    return map;
+  }, [items]);
+
+  const totalUnits = items.reduce((acc, r) => acc + Number(r.quantity || 0), 0);
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
-      <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-4 max-h-[94vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 bg-slate-900 text-white shrink-0">
-          <div className="flex items-center gap-2.5">
-            <Truck className="w-5 h-5 text-emerald-400 shrink-0" />
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm sm:text-base font-bold">
-                  Tahap 1 (Admin Gudang): Input SJ Supplier, ACC &amp; Validasi/Scan Barang Masuk
+    <>
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4">
+        <div className="relative w-full max-w-4xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-4 max-h-[94vh] flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 sm:px-6 py-4 bg-emerald-950 text-white shrink-0">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-emerald-500/20 border border-emerald-400/30 flex items-center justify-center text-emerald-400 shrink-0">
+                <PackageCheck className="w-5 h-5" />
+              </div>
+              <div>
+                <h2 className="text-sm sm:text-base font-semibold">
+                  Input Surat Jalan Supplier &rarr; Terbitkan LPB (Barang Masuk)
                 </h2>
-                <span className="px-2 py-0.5 rounded bg-blue-600 text-white text-[10px] font-mono font-bold uppercase">
-                  VALIDASI ADMIN GUDANG
-                </span>
+                <p className="text-[11px] sm:text-xs text-emerald-200/80">
+                  Tahap 1 (Admin Gudang): Input SJ & Validasi Scan Barcode &bull; Tahap 2 (Kepala Gudang): Approve Penambahan Stock
+                </p>
               </div>
-              <p className="text-[11px] sm:text-xs text-slate-300">
-                User Admin melakukan ACC &amp; validasi/scan barang masuk (stok belum bertambah). Penambahan stock akan di-approve oleh User Kepala Gudang.
-              </p>
             </div>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-4 overflow-y-auto flex-1">
-          {errorMsg && (
-            <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
-
-          {/* SJ & Supplier Information */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">
-                No. Surat Jalan (SJ) Supplier <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={sjNumber}
-                onChange={(e) => setSjNumber(e.target.value)}
-                placeholder="Misal: SJ/2026/X/1092"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">
-                Tanggal SJ Supplier <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={sjDate}
-                onChange={(e) => setSjDate(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">
-                Tanggal Diterima Gudang <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="date"
-                required
-                value={receivedDate}
-                onChange={(e) => setReceivedDate(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
-              />
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block font-medium text-slate-700 mb-1">
-                Nama Supplier / Vendor <span className="text-red-500">*</span>
-              </label>
-              <input
-                type="text"
-                required
-                value={supplierName}
-                onChange={(e) => setSupplierName(e.target.value)}
-                placeholder="Misal: PT Schneider Electric / PT Krakatau Steel / Distributor Resmi"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">No. Purchase Order (PO)</label>
-              <input
-                type="text"
-                value={poNumber}
-                onChange={(e) => setPoNumber(e.target.value)}
-                placeholder="Misal: PO-WHS-2026-1088"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">Nama Pengemudi / Ekspedisi</label>
-              <input
-                type="text"
-                value={driverName}
-                onChange={(e) => setDriverName(e.target.value)}
-                placeholder="Misal: Agus Setiawan (Kargo)"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">Plat Nomor Kendaraan</label>
-              <input
-                type="text"
-                value={vehiclePlate}
-                onChange={(e) => setVehiclePlate(e.target.value)}
-                placeholder="Misal: B 9241 UZX"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono uppercase"
-              />
-            </div>
-
-            <div>
-              <label className="block font-medium text-slate-700 mb-1">Catatan Dokumen / Kondisi Kemasan</label>
-              <input
-                type="text"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Misal: Segel palet utuh, dokumen lengkap"
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
-              />
-            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
           </div>
 
-          {/* Scanner Barcode Validasi Barang Masuk oleh Admin Gudang */}
-          <div className="bg-blue-950 text-white rounded-xl p-3.5 border border-blue-800 space-y-2.5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-blue-400 shrink-0" />
-                <div>
-                  <h3 className="text-xs font-bold text-white">
-                    Validasi Scan Barcode Barang Masuk (Oleh User Admin Gudang)
-                  </h3>
-                  <p className="text-[11px] text-blue-200">
-                    Scan barcode barang yang diterima atau klik tombol <strong>Scan Barcode</strong> pada baris tabel di bawah.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleScanAllBarcodes}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-800 hover:bg-blue-700 text-blue-100 rounded-lg text-xs font-semibold border border-blue-600 transition-colors shrink-0 self-start sm:self-auto"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-                <span>Simulasi Scan Semua Barcode</span>
-              </button>
-            </div>
-
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <ScanBarcode className="w-4 h-4 text-blue-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  ref={barcodeInputRef}
-                  type="text"
-                  value={barcodeInput}
-                  onChange={(e) => setBarcodeInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      processBarcodeScan(barcodeInput);
-                    }
-                  }}
-                  placeholder="Scan barcode atau ketik Kode SKU (contoh: SKU-SPR-001) lalu tekan Enter..."
-                  className="w-full pl-9 pr-3 py-1.5 bg-slate-900 border border-blue-700 rounded-lg text-xs text-white placeholder-slate-400 font-mono focus:ring-2 focus:ring-blue-400 focus:outline-hidden"
-                />
-              </div>
-              <button
-                type="button"
-                onClick={() => processBarcodeScan(barcodeInput)}
-                className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors shrink-0"
-              >
-                Scan / Validasi
-              </button>
-            </div>
-
-            {scanFeedback && (
-              <div
-                className={`p-2 rounded-lg text-xs flex items-center gap-2 font-medium ${
-                  scanFeedback.type === 'success'
-                    ? 'bg-emerald-900/80 text-emerald-100 border border-emerald-600'
-                    : 'bg-red-900/80 text-red-100 border border-red-600'
-                }`}
-              >
-                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>{scanFeedback.text}</span>
+          <form onSubmit={handleSubmit} className="p-4 sm:p-6 space-y-5 overflow-y-auto flex-1">
+            {errorMsg && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>{errorMsg}</span>
               </div>
             )}
-          </div>
 
-          {/* Items Section */}
-          <div className="pt-1">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700">
-                Item Barang Masuk &amp; Status Scan ({items.length} Barang)
-              </h3>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setIsPickerOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-2xs"
-                >
-                  <Layers className="w-3.5 h-3.5 text-emerald-400" />
-                  + Pilih dari Katalog
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddItemRow}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Tambah Baris
-                </button>
+            {/* Supplier & SJ Metadata */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 text-xs">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Nomor Surat Jalan (SJ Supplier) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={sjNumber}
+                  onChange={(e) => setSjNumber(e.target.value)}
+                  placeholder="Contoh: SJ/2025/05/8821"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Nama Perusahaan Supplier <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={supplierName}
+                  onChange={(e) => setSupplierName(e.target.value)}
+                  placeholder="Contoh: PT. Kawan Lama Sejahtera"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Nomor Purchase Order (PO) Ref
+                </label>
+                <input
+                  type="text"
+                  value={poNumber}
+                  onChange={(e) => setPoNumber(e.target.value)}
+                  placeholder="Contoh: PO-PROC-2025-102"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">Tanggal Surat Jalan</label>
+                <input
+                  type="date"
+                  value={sjDate}
+                  onChange={(e) => setSjDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Tanggal Diterima di Gudang
+                </label>
+                <input
+                  type="date"
+                  value={receivedDate}
+                  onChange={(e) => setReceivedDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Ekspedisi / Pengemudi & Nopol
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={driverName}
+                    onChange={(e) => setDriverName(e.target.value)}
+                    placeholder="Nama Sopir"
+                    className="w-full px-2.5 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                  />
+                  <input
+                    type="text"
+                    value={vehiclePlate}
+                    onChange={(e) => setVehiclePlate(e.target.value)}
+                    placeholder="B 9120 TX"
+                    className="w-full px-2.5 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono"
+                  />
+                </div>
               </div>
             </div>
 
-            <div className="border border-slate-200 rounded-lg overflow-x-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
-                  <tr>
-                    <th className="px-3 py-2.5">Pilih Barang Master</th>
-                    <th className="px-3 py-2.5 text-center">Validasi Barcode (Admin)</th>
-                    <th className="px-3 py-2.5 text-right w-24">Jumlah Qty</th>
-                    <th className="px-3 py-2.5 text-center w-24">Kondisi</th>
-                    <th className="px-3 py-2.5 w-32">Lot / Batch</th>
-                    <th className="px-3 py-2.5 w-10 text-center">Aksi</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {items.map((row, idx) => {
-                    const selectedItem = stockItems.find((s) => s.id === row.itemId);
-                    return (
-                      <tr
-                        key={idx}
-                        className={row.barcodeValidated ? 'bg-emerald-50/30' : 'hover:bg-slate-50/50'}
-                      >
-                        <td className="px-3 py-2">
-                          <select
-                            value={row.itemId}
-                            onChange={(e) => handleItemChange(idx, 'itemId', e.target.value)}
-                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-slate-900 focus:outline-hidden bg-white"
-                          >
-                            {stockItems.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.sku} - {s.name} (Stok Saat Ini: {s.currentStock} {s.unit})
-                              </option>
-                            ))}
-                          </select>
-                          <div className="text-[11px] text-slate-500 mt-0.5">
-                            Lokasi: {selectedItem?.location || '-'} | Satuan: {selectedItem?.unit || 'Pcs'}
-                          </div>
-                        </td>
+            {/* Keperluan & Lokasi Rak Penyimpanan */}
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200 rounded-xl grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
+              <div>
+                <label className="block font-semibold text-emerald-950 mb-1 flex items-center gap-1.5">
+                  <Target className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Keperluan / Peruntukan Barang Masuk</span>
+                </label>
+                <input
+                  type="text"
+                  value={usagePurpose}
+                  onChange={(e) => setUsagePurpose(e.target.value)}
+                  placeholder="Misal: Stok Sparepart Line 2 / Proyek Overhaul"
+                  className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-lg focus:ring-1 focus:ring-emerald-700 focus:outline-hidden"
+                />
+              </div>
 
-                        <td className="px-3 py-2 text-center">
-                          {row.barcodeValidated ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold text-[11px] border border-emerald-300">
-                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                              Barcode Tervalidasi
-                            </span>
-                          ) : (
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="font-semibold text-emerald-950 flex items-center gap-1.5">
+                    <MapPin className="w-3.5 h-3.5 text-emerald-700" />
+                    <span>Lokasi Rak Penyimpanan Default</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddLocInline(!showAddLocInline)}
+                    className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline"
+                  >
+                    {showAddLocInline ? 'Batal' : '+ Tambah Rak Baru'}
+                  </button>
+                </div>
+
+                {showAddLocInline ? (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="text"
+                      value={newLocCode}
+                      onChange={(e) => setNewLocCode(e.target.value)}
+                      placeholder="Kode Rak (Cth: Rak F-01)"
+                      className="w-1/2 px-2.5 py-1.5 bg-white border border-emerald-400 rounded-lg text-xs font-mono"
+                    />
+                    <input
+                      type="text"
+                      value={newLocName}
+                      onChange={(e) => setNewLocName(e.target.value)}
+                      placeholder="Keterangan"
+                      className="w-1/2 px-2.5 py-1.5 bg-white border border-emerald-400 rounded-lg text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleQuickAddLocation}
+                      className="px-2.5 py-1.5 bg-emerald-700 text-white font-semibold rounded-lg text-xs shrink-0"
+                    >
+                      Simpan
+                    </button>
+                  </div>
+                ) : (
+                  <select
+                    value={defaultStorageLocation}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setDefaultStorageLocation(val);
+                      setItems((prev) =>
+                        prev.map((it) => ({ ...it, storageLocation: val }))
+                      );
+                    }}
+                    className="w-full px-3 py-2 bg-white border border-emerald-300 rounded-lg font-medium text-slate-800 focus:ring-1 focus:ring-emerald-700 focus:outline-hidden"
+                  >
+                    {availableLocations.map((loc) => (
+                      <option key={loc} value={loc}>
+                        {loc}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            </div>
+
+            {/* Line Items Table + Multi-Method Add Barang */}
+            <div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <div>
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-700">
+                    Daftar Rincian Barang Diterima ({items.length} Macam &middot; {totalUnits} Total Unit)
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Cari cepat di bawah, pilih dari Katalog, atau daftarkan Barang Baru jika belum ada di Master.
+                  </p>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBarcodeAddScanner((prev) => !prev)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors shadow-xs ${
+                      showBarcodeAddScanner
+                        ? 'bg-amber-500 text-slate-950'
+                        : 'bg-slate-900 hover:bg-slate-800 text-amber-400'
+                    }`}
+                  >
+                    <ScanBarcode className="w-3.5 h-3.5" />
+                    {showBarcodeAddScanner ? 'Tutup Scan Tambah' : '+ Scan Barcode Tambah Item'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleValidateAllBarcodes}
+                    disabled={items.length === 0}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-lg transition-colors disabled:opacity-40"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Validasi Semua Barcode
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowQuickNewMaster((prev) => !prev)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-900 bg-white hover:bg-emerald-50 border border-emerald-400 rounded-lg transition-colors"
+                  >
+                    <PackagePlus className="w-3.5 h-3.5 text-emerald-700" />
+                    {showQuickNewMaster ? 'Tutup Barang Baru' : '+ Barang Baru (Master)'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleOpenPickerForAdd}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-600 rounded-lg transition-colors shadow-xs"
+                  >
+                    <Boxes className="w-3.5 h-3.5" />
+                    + Pilih dari Katalog
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleAddItemRow}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Tambah Baris
+                  </button>
+                </div>
+              </div>
+
+              {/* Barcode Scanner Panel for Directly Adding & Validating LPB Items */}
+              {showBarcodeAddScanner && (
+                <BarcodeAddScannerPanel
+                  mode="LPB"
+                  stockItems={stockItems}
+                  selectedQuantitiesMap={selectedQuantitiesMap}
+                  onBarcodeAddItem={(item, qty) => addOrMergeItemToLPB(item, qty, null, true)}
+                  onUnrecognizedBarcodeInLPB={(scannedCode, qty) => {
+                    setNewMasterSku(scannedCode);
+                    setNewMasterReceiveQty(qty);
+                    setShowQuickNewMaster(true);
+                    setShowBarcodeAddScanner(false);
+                  }}
+                  onClose={() => setShowBarcodeAddScanner(false)}
+                />
+              )}
+
+              {/* Inline Form: Daftar Barang Baru (Master) */}
+              {showQuickNewMaster && (
+                <div className="mb-3 p-3.5 bg-emerald-50 border border-emerald-300 rounded-xl space-y-3 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-emerald-950 flex items-center gap-1.5">
+                      <PackagePlus className="w-4 h-4 text-emerald-700" />
+                      <span>Daftarkan Barang Baru ke Master Stok & Tambahkan ke LPB Ini</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowQuickNewMaster(false)}
+                      className="text-slate-500 hover:text-slate-800 text-[11px] font-semibold"
+                    >
+                      Tutup
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-6 gap-2.5">
+                    <div className="sm:col-span-1">
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        Material Code *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMasterSku}
+                        onChange={(e) => setNewMasterSku(e.target.value.toUpperCase())}
+                        placeholder="BRG-0099"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono uppercase text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        Nama & Spesifikasi Barang *
+                      </label>
+                      <input
+                        type="text"
+                        value={newMasterName}
+                        onChange={(e) => setNewMasterName(e.target.value)}
+                        placeholder="Contoh: Seal Kit Hydraulic Cylinder Ø50"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-1">
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        Kategori
+                      </label>
+                      <input
+                        type="text"
+                        value={newMasterCategory}
+                        onChange={(e) => setNewMasterCategory(e.target.value)}
+                        placeholder="Mechanical"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div className="sm:col-span-1">
+                      <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                        Satuan & Rak
+                      </label>
+                      <div className="flex gap-1">
+                        <select
+                          value={newMasterUnit}
+                          onChange={(e) => setNewMasterUnit(e.target.value)}
+                          className="w-1/2 px-1.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                        >
+                          {['Pcs', 'Set', 'Unit', 'Box', 'Roll', 'Meter', 'Liter', 'Kaleng', 'Kg'].map(
+                            (u) => (
+                              <option key={u} value={u}>
+                                {u}
+                              </option>
+                            )
+                          )}
+                        </select>
+                        <select
+                          value={newMasterLocation}
+                          onChange={(e) => setNewMasterLocation(e.target.value)}
+                          className="w-1/2 px-1.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                        >
+                          {availableLocations.map((loc) => (
+                            <option key={loc} value={loc}>
+                              {loc}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="sm:col-span-1 flex items-end gap-1.5">
+                      <div className="flex-1">
+                        <label className="block text-[11px] font-semibold text-emerald-900 mb-1">
+                          Qty Masuk *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={newMasterReceiveQty}
+                          onChange={(e) =>
+                            setNewMasterReceiveQty(Math.max(1, parseInt(e.target.value) || 1))
+                          }
+                          className="w-full px-2 py-1.5 bg-white border border-emerald-400 rounded-lg font-mono font-bold text-xs"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleQuickCreateNewMasterInline}
+                        className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-semibold rounded-lg shadow-xs shrink-0"
+                      >
+                        + Simpan
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Quick Search & Direct Add Bar */}
+              <div className="mb-3 relative">
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 p-2.5 bg-slate-100/80 border border-slate-200 rounded-xl">
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={quickSearchText}
+                      onFocus={() => setShowQuickDropdown(true)}
+                      onChange={(e) => {
+                        setQuickSearchText(e.target.value);
+                        setShowQuickDropdown(true);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && quickSearchText.trim()) {
+                          e.preventDefault();
+                          const clean = quickSearchText.trim().toUpperCase();
+                          const exactMatch = stockItems.find(
+                            (s) => s.sku.toUpperCase() === clean
+                          );
+                          const target =
+                            exactMatch ||
+                            (quickSearchResults.length === 1 ? quickSearchResults[0] : null);
+                          if (target) {
+                            playBeep();
+                            addOrMergeItemToLPB(
+                              target,
+                              quickSearchQty,
+                              null,
+                              Boolean(exactMatch)
+                            );
+                            setQuickSearchText('');
+                            setShowQuickDropdown(false);
+                          }
+                        }
+                      }}
+                      placeholder="Scan Barcode (Enter) atau ketik Material Code / Nama Barang untuk tambah cepat ke LPB..."
+                      className="w-full pl-9 pr-14 py-1.5 bg-white border border-slate-300 rounded-lg text-xs focus:ring-1 focus:ring-emerald-700 focus:outline-hidden"
+                    />
+                    {quickSearchText && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setQuickSearchText('');
+                          setShowQuickDropdown(false);
+                        }}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-slate-400 hover:text-slate-700"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] font-medium text-slate-600">Qty Masuk:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      value={quickSearchQty}
+                      onChange={(e) => setQuickSearchQty(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-16 px-2 py-1.5 bg-white border border-slate-300 rounded-lg font-mono font-bold text-xs text-center"
+                    />
+                  </div>
+                </div>
+
+                {/* Quick Search Autocomplete Dropdown */}
+                {showQuickDropdown && quickSearchText.trim().length > 0 && (
+                  <div className="absolute left-0 right-0 mt-1 z-30 bg-white border border-slate-300 rounded-xl shadow-xl max-h-60 overflow-y-auto divide-y divide-slate-100">
+                    {quickSearchResults.length === 0 ? (
+                      <div className="p-3 text-xs text-slate-500 flex items-center justify-between">
+                        <span>
+                          Tidak ditemukan barang dengan kata kunci <strong>"{quickSearchText}"</strong>.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNewMasterSku(
+                              !quickSearchText.includes(' ')
+                                ? quickSearchText.trim().toUpperCase()
+                                : `MAT-${String(stockItems.length + 1).padStart(4, '0')}`
+                            );
+                            setNewMasterName(quickSearchText.includes(' ') ? quickSearchText.trim() : '');
+                            setShowQuickNewMaster(true);
+                            setShowQuickDropdown(false);
+                          }}
+                          className="px-2.5 py-1 bg-emerald-700 text-white font-semibold rounded-lg text-[11px]"
+                        >
+                          + Daftarkan Barang Baru
+                        </button>
+                      </div>
+                    ) : (
+                      quickSearchResults.map((item) => {
+                        const alreadyInList = items.some((i) => i.itemId === item.id);
+                        return (
+                          <div
+                            key={item.id}
+                            className="px-3.5 py-2.5 hover:bg-emerald-50/60 flex items-center justify-between gap-2 text-xs transition-colors"
+                          >
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  {item.sku}
+                                </span>
+                                <span className="font-semibold text-slate-800">{item.name}</span>
+                                {alreadyInList && (
+                                  <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
+                                    Sudah di daftar
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[11px] text-slate-500 mt-0.5">
+                                Kategori: {item.category} &bull; Rak: {item.location} &bull; Stok Saat Ini:{' '}
+                                <strong>
+                                  {item.currentStock} {item.unit}
+                                </strong>
+                              </div>
+                            </div>
                             <button
                               type="button"
-                              onClick={() =>
-                                selectedItem && processBarcodeScan(selectedItem.sku)
-                              }
-                              className="inline-flex items-center gap-1 px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-[11px] font-semibold shadow-2xs transition-colors"
+                              onClick={() => {
+                                addOrMergeItemToLPB(item, quickSearchQty, null);
+                                setQuickSearchText('');
+                                setShowQuickDropdown(false);
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-semibold rounded-lg text-xs shrink-0 shadow-2xs"
                             >
-                              <ScanBarcode className="w-3.5 h-3.5" />
-                              <span>Scan Barcode</span>
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>
+                                {alreadyInList
+                                  ? `+ Tambah Qty (${quickSearchQty})`
+                                  : `+ Masukkan (${quickSearchQty} ${item.unit})`}
+                              </span>
                             </button>
-                          )}
-                        </td>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                )}
+              </div>
 
-                        <td className="px-3 py-2 text-right">
-                          <input
-                            type="number"
-                            min="1"
-                            value={row.quantity}
-                            onChange={(e) =>
-                              handleItemChange(idx, 'quantity', parseInt(e.target.value) || 0)
-                            }
-                            className="w-20 px-2 py-1.5 border border-slate-300 rounded text-right font-mono font-semibold focus:ring-1 focus:ring-slate-900 focus:outline-hidden text-xs bg-white"
-                          />
-                        </td>
+              {/* Camera Barcode Scanner Box for LPB */}
+              {activeCameraRowIdx !== null && (
+                <div className="mb-3 p-3.5 bg-slate-900 text-white rounded-xl border border-emerald-500/40 space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Camera className="w-4 h-4 text-emerald-400 animate-pulse" />
+                      <span className="text-xs font-semibold">
+                        Kamera Pemindai Barcode Aktif (Baris #{activeCameraRowIdx + 1}:{' '}
+                        {stockItems.find((s) => s.id === items[activeCameraRowIdx]?.itemId)?.sku || ''})
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveCameraRowIdx(null)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[11px]"
+                    >
+                      <CameraOff className="w-3.5 h-3.5" />
+                      Tutup Kamera
+                    </button>
+                  </div>
 
-                        <td className="px-3 py-2 text-center">
-                          <select
-                            value={row.condition}
-                            onChange={(e) => handleItemChange(idx, 'condition', e.target.value)}
-                            className="px-2 py-1.5 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-slate-900 focus:outline-hidden bg-white"
-                          >
-                            <option value="Baik">Baik</option>
-                            <option value="Kurang">Kurang</option>
-                            <option value="Rusak">Rusak</option>
-                          </select>
-                        </td>
+                  <div className="relative w-full max-w-sm mx-auto overflow-hidden rounded-lg bg-black border border-slate-700 aspect-video flex items-center justify-center">
+                    <video
+                      ref={videoRef}
+                      playsInline
+                      muted
+                      className="w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-x-6 top-1/2 -translate-y-1/2 h-0.5 bg-emerald-400/80 shadow-[0_0_8px_#34d399]" />
+                  </div>
 
-                        <td className="px-3 py-2">
-                          <input
-                            type="text"
-                            value={row.batchNo}
-                            onChange={(e) => handleItemChange(idx, 'batchNo', e.target.value)}
-                            placeholder="No. Lot/Batch"
-                            className="w-full px-2 py-1.5 border border-slate-300 rounded text-xs focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-mono bg-white"
-                          />
-                        </td>
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    {lastCameraScanInfo ? (
+                      <div className="font-mono text-emerald-300 flex items-center gap-1.5">
+                        <Volume2 className="w-3.5 h-3.5" />
+                        <span>{lastCameraScanInfo}</span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-400 text-[11px]">
+                        Arahkan kamera ke barcode barang...
+                      </span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        playBeep();
+                        handleValidateBarcodeRow(activeCameraRowIdx, '');
+                        setActiveCameraRowIdx(null);
+                      }}
+                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold rounded-lg text-xs shrink-0"
+                    >
+                      Konfirmasi Scan Sesuai
+                    </button>
+                  </div>
 
-                        <td className="px-3 py-2 text-center">
-                          <button
-                            type="button"
-                            disabled={items.length <= 1}
-                            onClick={() => handleRemoveItemRow(idx)}
-                            className="p-1 text-slate-400 hover:text-red-600 disabled:opacity-30 disabled:hover:text-slate-400 transition-colors"
-                            title="Hapus baris"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </td>
-                      </tr>
+                  {cameraError && (
+                    <div className="p-2.5 bg-amber-950/90 border border-amber-600/50 rounded-lg text-[11px] text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <span>{cameraError}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {items.length === 0 ? (
+                <div className="p-8 border-2 border-dashed border-slate-300 rounded-xl text-center space-y-3 bg-slate-50">
+                  <p className="text-xs text-slate-600 font-medium">
+                    Belum ada barang di dalam daftar LPB ini.
+                  </p>
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowBarcodeAddScanner(true)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-amber-400 bg-slate-900 hover:bg-slate-800 rounded-lg shadow-xs"
+                    >
+                      <ScanBarcode className="w-4 h-4" />
+                      + Scan Barcode Tambah Barang
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleOpenPickerForAdd}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-600 rounded-lg shadow-xs"
+                    >
+                      <Boxes className="w-4 h-4" />
+                      + Pilih Barang dari Katalog
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleAddItemRow}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 rounded-lg"
+                    >
+                      <Plus className="w-4 h-4" />
+                      Tambah Baris Manual
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-96 overflow-y-auto pr-1">
+                  {items.map((row, idx) => {
+                    const selected = stockItems.find((s) => s.id === row.itemId);
+                    return (
+                      <div
+                        key={idx}
+                        className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5 text-xs"
+                      >
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-center">
+                          {/* Select Item + Replace from Catalog */}
+                          <div className="sm:col-span-5">
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="text-[11px] font-semibold text-slate-700">
+                                Barang #{idx + 1} (Material Code - Nama)
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenPickerForReplace(idx)}
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200 transition-colors"
+                                title="Cari & ganti barang baris ini melalui Katalog"
+                              >
+                                <RefreshCw className="w-3 h-3" />
+                                <span>Cari di Katalog</span>
+                              </button>
+                            </div>
+                            <select
+                              value={row.itemId}
+                              onChange={(e) => handleItemChange(idx, 'itemId', e.target.value)}
+                              className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden font-medium"
+                            >
+                              {stockItems.map((item) => {
+                                const usedInOtherRow = items.some(
+                                  (other, oIdx) => oIdx !== idx && other.itemId === item.id
+                                );
+                                return (
+                                  <option key={item.id} value={item.id}>
+                                    {item.sku} — {item.name} (Stok: {item.currentStock} {item.unit} | Min:{' '}
+                                    {item.minStock} {item.unit})
+                                    {usedInOtherRow ? ' [Sudah di daftar]' : ''}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+
+                          {/* Quantity Stepper */}
+                          <div className="sm:col-span-3">
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Qty Diterima ({selected?.unit || 'Unit'})
+                            </label>
+                            <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleItemChange(idx, 'quantity', Math.max(1, Number(row.quantity) - 1))
+                                }
+                                disabled={row.quantity <= 1}
+                                className="px-2.5 py-2 text-slate-600 hover:bg-slate-100 disabled:opacity-30"
+                              >
+                                <Minus className="w-3.5 h-3.5" />
+                              </button>
+                              <input
+                                type="number"
+                                min="1"
+                                required
+                                value={row.quantity}
+                                onChange={(e) => {
+                                  const val = parseInt(e.target.value, 10);
+                                  handleItemChange(idx, 'quantity', isNaN(val) ? 1 : Math.max(1, val));
+                                }}
+                                className="w-full py-1.5 text-center font-mono font-bold text-xs focus:outline-hidden"
+                              />
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  handleItemChange(idx, 'quantity', Number(row.quantity || 0) + 1)
+                                }
+                                className="px-2.5 py-2 text-slate-600 hover:bg-slate-100"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Storage Location per Item */}
+                          <div className="sm:col-span-3">
+                            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                              Lokasi Rak Simpan
+                            </label>
+                            <select
+                              value={row.storageLocation || defaultStorageLocation}
+                              onChange={(e) =>
+                                handleItemChange(idx, 'storageLocation', e.target.value)
+                              }
+                              className="w-full px-2.5 py-2 bg-white border border-slate-300 rounded-lg font-mono text-xs focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                            >
+                              {availableLocations.map((loc) => (
+                                <option key={loc} value={loc}>
+                                  {loc}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Remove Action */}
+                          <div className="sm:col-span-1 flex items-end justify-end pt-4">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveItemRow(idx)}
+                              className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                              title="Hapus baris barang ini"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Secondary Row: Condition, Batch No & Barcode Scan Validation */}
+                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-2 border-t border-slate-200/70 items-center">
+                          <div className="sm:col-span-3">
+                            <label className="block text-[10px] text-slate-500 mb-0.5">
+                              Kondisi Fisik
+                            </label>
+                            <select
+                              value={row.condition}
+                              onChange={(e) => handleItemChange(idx, 'condition', e.target.value)}
+                              className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs"
+                            >
+                              <option value="Baik">Baik (Sesuai Standar)</option>
+                              <option value="Kurang">Kurang (Selisih / Minor)</option>
+                              <option value="Rusak">Rusak / Cacat Fisik</option>
+                            </select>
+                          </div>
+
+                          <div className="sm:col-span-3">
+                            <label className="block text-[10px] text-slate-500 mb-0.5">
+                              No. Batch / Lot
+                            </label>
+                            <input
+                              type="text"
+                              value={row.batchNo}
+                              onChange={(e) => handleItemChange(idx, 'batchNo', e.target.value)}
+                              placeholder="LOT-2025-A"
+                              className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono text-xs"
+                            />
+                          </div>
+
+                          {/* Scan / Validasi Barcode Barang oleh Admin Gudang */}
+                          <div className="sm:col-span-6">
+                            <label className="block text-[10px] text-slate-500 mb-0.5">
+                              Validasi Scan Barcode Barang (Wajib oleh Admin Gudang)
+                            </label>
+                            {row.barcodeValidated ? (
+                              <div className="flex items-center justify-between px-3 py-1.5 bg-emerald-50 border border-emerald-300 rounded-lg text-emerald-900">
+                                <div className="flex items-center gap-1.5 font-semibold text-xs">
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                  <span> Tervalidasi Scan ({selected?.sku})</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => handleItemChange(idx, 'barcodeValidated', false)}
+                                  className="text-[11px] text-emerald-700 hover:underline font-medium"
+                                >
+                                  Ulangi Scan
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <input
+                                  type="text"
+                                  value={row.scanInputText}
+                                  onChange={(e) =>
+                                    handleItemChange(idx, 'scanInputText', e.target.value)
+                                  }
+                                  placeholder={`Ketik / Scan Material Code (${selected?.sku || ''})`}
+                                  className="flex-1 px-2.5 py-1.5 bg-white border border-amber-300 rounded-lg font-mono text-xs focus:ring-1 focus:ring-emerald-600 focus:outline-hidden"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setActiveCameraRowIdx(activeCameraRowIdx === idx ? null : idx)
+                                  }
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-semibold rounded-lg text-xs shrink-0 transition-colors"
+                                  title="Buka Kamera Pemindai Barcode"
+                                >
+                                  <Camera className="w-3.5 h-3.5" />
+                                  <span className="hidden sm:inline">Kamera</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleValidateBarcodeRow(idx)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white font-semibold rounded-lg text-xs shrink-0 transition-colors"
+                                  title="Validasi / Simulasi Scan Barcode"
+                                >
+                                  <Check className="w-3.5 h-3.5" />
+                                  <span>Validasi</span>
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     );
                   })}
-                </tbody>
-              </table>
+                </div>
+              )}
             </div>
-          </div>
 
-          {/* Notice */}
-          <div className="p-3 bg-blue-50 rounded-lg border border-blue-200 text-xs text-blue-950 flex items-start gap-2">
-            <ShieldCheck className="w-4 h-4 text-blue-700 shrink-0 mt-0.5" />
-            <div>
-              <strong>Prosedur Pemisahan Wewenang Penambahan Stock (LPB):</strong>
-              <ul className="list-disc list-inside mt-0.5 space-y-0.5 text-[11px] text-blue-900">
-                <li>
-                  <strong>User Admin Gudang:</strong> Hanya melakukan ACC &amp; validasi barang / scan barcode penerimaan SJ Supplier. Saat disimpan, <strong>stok fisik gudang belum bertambah</strong>.
-                </li>
-                <li>
-                  <strong>User Kepala Gudang:</strong> Melakukan <strong>Approve Penambahan Stock</strong> pada dokumen LPB ini sehingga saldo stok fisik di sistem otomatis bertambah dan tercatat di Kartu Stok.
-                </li>
-              </ul>
+            {/* Remarks & Verifier */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs pt-2 border-t border-slate-100">
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Petugas Penerima & Validasi (Admin Gudang)
+                </label>
+                <input
+                  type="text"
+                  disabled
+                  value={`${activeUserName} (Menunggu Approve Penambahan Stock Kepala Gudang)`}
+                  className="w-full px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-600 cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block font-medium text-slate-700 mb-1">
+                  Catatan Pemeriksaan Fisik / Keterangan LPB
+                </label>
+                <input
+                  type="text"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  placeholder="Contoh: Kemasan palet utuh, segel pabrik lengkap"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
+                />
+              </div>
             </div>
-          </div>
 
-          {/* Footer Actions */}
-          <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2.5">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              className="inline-flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors shadow-xs"
-            >
-              <FileCheck className="w-4 h-4 text-white" />
-              ACC &amp; Validasi Barang Masuk LPB (Admin Gudang)
-            </button>
-          </div>
-        </form>
+            {/* Footer */}
+            <div className="pt-3 border-t border-slate-200 flex items-center justify-between gap-3">
+              <p className="text-[11px] text-slate-500">
+                * Tahap 1: Admin Gudang meng-ACC & validasi scan barang (stok fisik <strong>belum bertambah</strong>). Stok otomatis bertambah setelah <strong>Kepala Gudang meng-approve penambahan stock</strong>.
+              </p>
+              <div className="flex items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-emerald-700 hover:bg-emerald-600 rounded-lg transition-colors shadow-xs"
+                >
+                  <PackageCheck className="w-4 h-4" />
+                  ACC & Validasi LPB (Kirim ke Kepala Gudang)
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
 
       <ItemPickerModal
         isOpen={isPickerOpen}
-        onClose={() => setIsPickerOpen(false)}
+        onClose={() => {
+          setIsPickerOpen(false);
+          setReplacingRowIndex(null);
+        }}
+        mode="LPB"
         stockItems={stockItems}
         selectedItemIds={items.map((i) => i.itemId)}
+        selectedQuantitiesMap={selectedQuantitiesMap}
         onSelectItem={handleSelectFromPicker}
-        title="Pilih Barang dari Master untuk Penerimaan SJ"
-        subtitle="Pilih item dari master stok untuk ditambahkan ke daftar penerimaan LPB."
+        onCreateNewMasterItem={handleCreateNewMasterFromPicker}
+        availableLocations={availableLocations}
+        replaceModeIndex={replacingRowIndex}
+        title={
+          replacingRowIndex !== null
+            ? `Ganti Barang Baris #${replacingRowIndex + 1} (LPB)`
+            : 'Pilih Barang Masuk untuk LPB'
+        }
+        subtitle="Pilih dari katalog gudang atau daftarkan barang baru jika belum terdaftar di Master."
       />
-    </div>
+    </>
   );
 };

@@ -182,8 +182,8 @@ export function printElementDirectly(
 
     const pageRule =
       orientation === 'landscape'
-        ? '@page { size: A4 landscape; margin: 6mm; }'
-        : '@page { size: A4 portrait; margin: 8mm; }';
+        ? '@page { size: A4 landscape; margin: 5mm; }'
+        : '@page { size: A4 portrait; margin: 5mm; }';
 
     doc.open();
     doc.write(`

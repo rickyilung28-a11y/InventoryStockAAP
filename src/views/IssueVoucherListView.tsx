@@ -1,6 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
-import { IssueVoucherDocument, UserAccount } from '../types/inventory';
+import {
+  IssueVoucherDocument,
+  UserAccount,
+  getEffectivePermissions,
+} from '../types/inventory';
 import {
   Search,
   Printer,
@@ -44,9 +48,10 @@ export const IssueVoucherListView: React.FC<IssueVoucherListViewProps> = ({
   onDeleteVoucher,
   onPrintVoucher,
 }) => {
-  const isAdmin = currentUser.role === 'admin';
-  const isKepalaGudang = currentUser.role === 'kepala_gudang';
-  const isRequesterUser = currentUser.role === 'user';
+  const perms = getEffectivePermissions(currentUser);
+  const isAdmin = perms.canValidateSIV;
+  const isKepalaGudang = perms.canApproveSIVStockDeduction;
+  const isRequesterUser = !perms.canViewAllSIV;
 
   const [activeTab, setActiveTab] = useState<
     'ALL' | 'PENDING' | 'WAITING_HANDOVER' | 'COMPLETED' | 'REJECTED'
@@ -58,7 +63,7 @@ export const IssueVoucherListView: React.FC<IssueVoucherListViewProps> = ({
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
-  // ATURAN AKSES: User pemohon SIV hanya dapat melihat SIV yang diterbitkan oleh dirinya sendiri
+  // ATURAN AKSES: User tanpa hak canViewAllSIV hanya dapat melihat SIV yang diterbitkan oleh dirinya sendiri
   const roleVisibleVouchers = useMemo(() => {
     if (isRequesterUser) {
       return issueVouchers.filter(
@@ -206,7 +211,7 @@ export const IssueVoucherListView: React.FC<IssueVoucherListViewProps> = ({
         'Diserahkan Admin Gudang',
         'Diterima Oleh (Penerima)',
         'Waktu Penyerahan',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Qty Diminta',
         'Qty Dikeluarkan',
@@ -725,7 +730,7 @@ export const IssueVoucherListView: React.FC<IssueVoucherListViewProps> = ({
                           <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                             <tr>
                               <th className="px-3 py-2 text-center w-10">No</th>
-                              <th className="px-3 py-2">Kode SKU</th>
+                              <th className="px-3 py-2">Material Code</th>
                               <th className="px-3 py-2">Nama Barang</th>
                               <th className="px-3 py-2 text-right">Qty Diminta</th>
                               <th className="px-3 py-2 text-right">Qty Diserahkan (Validasi Admin)</th>

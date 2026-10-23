@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
 import { useInventory } from '../context/InventoryContext';
-import { CostCenterEntry, GLAccountEntry } from '../types/inventory';
+import {
+  CostCenterEntry,
+  GLAccountEntry,
+  getEffectivePermissions,
+} from '../types/inventory';
 import {
   Building2,
   BookOpen,
@@ -12,8 +16,10 @@ import {
   X,
   Info,
   FileSpreadsheet,
+  Download,
 } from 'lucide-react';
 import { ImportExcelModal } from '../components/ImportExcelModal';
+import { exportCostCenterGLToExcel } from '../utils/sqlAndExcelExport';
 
 export const CostCenterGLView: React.FC = () => {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -58,7 +64,8 @@ export const CostCenterGLView: React.FC = () => {
   const [formDesc, setFormDesc] = useState('');
   const [formError, setFormError] = useState('');
 
-  const isAdmin = currentUser?.role === 'admin';
+  const perms = getEffectivePermissions(currentUser);
+  const isAdmin = perms.canManageCostCenterGL;
 
   // Filtered lists
   const filteredCostCenters = costCenters.filter(
@@ -192,44 +199,56 @@ export const CostCenterGLView: React.FC = () => {
             </div>
           </div>
 
-          {isAdmin && (
-            <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
-              {(activeTab === 'cost-centers' ? costCenters.length > 0 : glAccounts.length > 0) && (
+          <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => exportCostCenterGLToExcel(costCenters, glAccounts)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-emerald-950 bg-emerald-100 hover:bg-emerald-200 border border-emerald-300 rounded-lg transition-colors shadow-2xs"
+              title="Export Master Cost Center & GL Account ke File Excel (.xlsx)"
+            >
+              <Download className="w-4 h-4 text-emerald-700" />
+              <span>Export Master Excel (.xlsx)</span>
+            </button>
+
+            {isAdmin && (
+              <>
+                {(activeTab === 'cost-centers' ? costCenters.length > 0 : glAccounts.length > 0) && (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearAll(activeTab === 'cost-centers' ? 'CC' : 'GL')}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors"
+                    title="Hapus seluruh baris default/lama pada tabel ini"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                    <span>
+                      Hapus Semua {activeTab === 'cost-centers' ? 'Cost Center' : 'GL'}
+                    </span>
+                  </button>
+                )}
+
                 <button
                   type="button"
-                  onClick={() => setConfirmClearAll(activeTab === 'cost-centers' ? 'CC' : 'GL')}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition-colors"
-                  title="Hapus seluruh baris default/lama pada tabel ini"
+                  onClick={() => setIsImportModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors shadow-2xs"
+                  title="Impor daftar Cost Center dan GL Account dari file Excel"
                 >
-                  <Trash2 className="w-3.5 h-3.5 text-red-600" />
+                  <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                  <span>Import Excel (Replace / Tambah)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenAdd}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
+                >
+                  <Plus className="w-4 h-4 text-emerald-400" />
                   <span>
-                    Hapus Semua {activeTab === 'cost-centers' ? 'Cost Center' : 'GL'}
+                    Tambah {activeTab === 'cost-centers' ? 'Cost Center Baru' : 'GL Account Baru'}
                   </span>
                 </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setIsImportModalOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors shadow-2xs"
-                title="Impor daftar Cost Center dan GL Account dari file Excel"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                <span>Import Excel (Replace / Tambah)</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleOpenAdd}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg transition-colors shadow-xs"
-              >
-                <Plus className="w-4 h-4 text-emerald-400" />
-                <span>
-                  Tambah {activeTab === 'cost-centers' ? 'Cost Center Baru' : 'GL Account Baru'}
-                </span>
-              </button>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Info Callout */}

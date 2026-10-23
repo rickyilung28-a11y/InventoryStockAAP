@@ -9,6 +9,7 @@ import {
   getSavedThermalTemplates,
   saveThermalTemplate,
   deleteThermalTemplate,
+  computeAutoFitDesignForPaper,
 } from '../utils/thermalTemplates';
 import { ThermalStickerRenderer, StickerData } from './ThermalStickerRenderer';
 import {
@@ -72,7 +73,9 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
   });
 
   // Designer panel active tab
-  const [designerTab, setDesignerTab] = useState<'paper' | 'header' | 'barcode' | 'text' | 'meta'>('paper');
+  const [designerTab, setDesignerTab] = useState<
+    'elements' | 'paper' | 'header' | 'barcode' | 'text' | 'meta'
+  >('elements');
 
   // Preview zoom scale & navigation
   const [previewScale, setPreviewScale] = useState<number>(1.75); // 1.75x for clear preview on screen
@@ -83,6 +86,11 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [newTemplateName, setNewTemplateName] = useState('');
   const [saveSuccessNotice, setSaveSuccessNotice] = useState<string | null>(null);
+
+  // Full Sheet Print Preview Before Printing state
+  const [isPrintSheetPreviewOpen, setIsPrintSheetPreviewOpen] = useState(false);
+  const [sheetPreviewLayout, setSheetPreviewLayout] = useState<'roll' | 'grid'>('grid');
+  const [sheetPreviewZoom, setSheetPreviewZoom] = useState<number>(1.15);
 
   // Sync current template when user picks a different template from the dropdown
   const handleSelectTemplate = (id: string) => {
@@ -139,14 +147,43 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
 
     const preset = PRESET_LABEL_SIZES.find((s) => s.id === presetId);
     if (preset) {
-      setCurrentTemplate((prev) => ({
-        ...prev,
-        pageSize: {
-          ...preset,
-          orientation: prev.pageSize.orientation || 'landscape',
-        },
-      }));
+      setCurrentTemplate((prev) => {
+        const nextOrientation = prev.pageSize.orientation || 'landscape';
+        const nextDesign =
+          prev.design.fitToPaper !== false
+            ? computeAutoFitDesignForPaper(
+                preset.widthMm,
+                preset.heightMm,
+                nextOrientation,
+                prev.design
+              )
+            : prev.design;
+        return {
+          ...prev,
+          pageSize: {
+            ...preset,
+            orientation: nextOrientation,
+          },
+          design: nextDesign,
+        };
+      });
     }
+  };
+
+  // Trigger manual Fit to Paper optimization
+  const handleApplyFitToPaperNow = () => {
+    setCurrentTemplate((prev) => ({
+      ...prev,
+      design: computeAutoFitDesignForPaper(
+        prev.pageSize.widthMm,
+        prev.pageSize.heightMm,
+        prev.pageSize.orientation,
+        prev.design
+      ),
+    }));
+    showNotice(
+      `Fit to Paper aktif: Ukuran barcode, font & margin disesuaikan otomatis ke kertas ${currentTemplate.pageSize.widthMm}×${currentTemplate.pageSize.heightMm}mm.`
+    );
   };
 
   // Save current design as new custom template
@@ -214,11 +251,12 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
     setTimeout(() => setSaveSuccessNotice(null), 3500);
   };
 
-  // Handle thermal printing
+  // Handle thermal or A4 sheet printing with Fit to Paper
   const handlePrint = () => {
     const isLandscape = currentTemplate.pageSize.orientation === 'landscape';
     const widthMm = isLandscape ? currentTemplate.pageSize.widthMm : currentTemplate.pageSize.heightMm;
     const heightMm = isLandscape ? currentTemplate.pageSize.heightMm : currentTemplate.pageSize.widthMm;
+    const isA4Sheet = currentTemplate.design.paperPrintMode === 'a4_sheet';
 
     // Inject dynamic CSS page-size rule
     const styleId = 'clabel-dynamic-print-style';
@@ -229,30 +267,67 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
       document.head.appendChild(styleEl);
     }
 
-    styleEl.innerHTML = `
-      @media print {
-        @page {
-          size: ${widthMm}mm ${heightMm}mm !important;
-          margin: 0 !important;
+    if (isA4Sheet) {
+      styleEl.innerHTML = `
+        @media print {
+          @page {
+            size: A4 portrait !important;
+            margin: 6mm !important;
+          }
+          body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+          .clabel-print-container {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 2.5mm !important;
+            align-content: flex-start !important;
+            justify-content: flex-start !important;
+          }
+          .clabel-thermal-print-page {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            width: ${widthMm}mm !important;
+            height: ${heightMm}mm !important;
+            max-height: ${heightMm}mm !important;
+            overflow: hidden !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-sizing: border-box !important;
+          }
         }
-        body {
-          margin: 0 !important;
-          padding: 0 !important;
-          background: #ffffff !important;
+      `;
+    } else {
+      styleEl.innerHTML = `
+        @media print {
+          @page {
+            size: ${widthMm}mm ${heightMm}mm !important;
+            margin: 0 !important;
+          }
+          body {
+            margin: 0 !important;
+            padding: 0 !important;
+            background: #ffffff !important;
+          }
+          .clabel-print-container {
+            display: block !important;
+          }
+          .clabel-thermal-print-page {
+            page-break-after: always !important;
+            break-after: page !important;
+            width: ${widthMm}mm !important;
+            height: ${heightMm}mm !important;
+            max-height: ${heightMm}mm !important;
+            overflow: hidden !important;
+            margin: 0 !important;
+            padding: 0 !important;
+            box-sizing: border-box !important;
+          }
         }
-        .clabel-thermal-print-page {
-          page-break-after: always !important;
-          break-after: page !important;
-          width: ${widthMm}mm !important;
-          height: ${heightMm}mm !important;
-          max-height: ${heightMm}mm !important;
-          overflow: hidden !important;
-          margin: 0 !important;
-          padding: 0 !important;
-          box-sizing: border-box !important;
-        }
-      }
-    `;
+      `;
+    }
 
     window.print();
   };
@@ -318,12 +393,21 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
             )}
 
             <button
+              onClick={() => setIsPrintSheetPreviewOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold rounded-lg transition-colors shadow-xs"
+              title="Lihat preview seluruh lembar stiker sebelum dicetak ke printer"
+            >
+              <Eye className="w-4 h-4" />
+              <span>Preview Sebelum Cetak ({totalStickerCount})</span>
+            </button>
+
+            <button
               onClick={handlePrint}
               className="inline-flex items-center gap-2 px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-bold rounded-lg transition-colors shadow-xs"
               title="Cetak langsung ke printer thermal Clabel"
             >
               <Printer className="w-4 h-4" />
-              <span>Cetak {totalStickerCount} Stiker</span>
+              <span>Cetak Langsung</span>
             </button>
 
             <button
@@ -417,8 +501,39 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
             </button>
           </div>
 
-          {/* Copies & Quick Size indicator */}
-          <div className="flex items-center gap-3">
+          {/* Copies, Fit to Paper & Quick Size indicator */}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <label
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-bold cursor-pointer transition-colors ${
+                currentTemplate.design.fitToPaper !== false
+                  ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                  : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+              }`}
+              title="Otomatis sesuaikan skala isi label agar pas 100% dengan ukuran kertas tanpa terpotong"
+            >
+              <input
+                type="checkbox"
+                checked={currentTemplate.design.fitToPaper !== false}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  setCurrentTemplate((prev) => ({
+                    ...prev,
+                    design: checked
+                      ? computeAutoFitDesignForPaper(
+                          prev.pageSize.widthMm,
+                          prev.pageSize.heightMm,
+                          prev.pageSize.orientation,
+                          { ...prev.design, fitToPaper: true }
+                        )
+                      : { ...prev.design, fitToPaper: false },
+                  }));
+                }}
+                className="w-3.5 h-3.5 accent-amber-400 rounded"
+              />
+              <Maximize2 className="w-3.5 h-3.5" />
+              <span>Fit to Paper</span>
+            </label>
+
             <div className="flex items-center gap-1.5">
               <span className="text-slate-500 font-medium">Salinan:</span>
               <input
@@ -463,63 +578,656 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
             {/* Tabs for Designer Categories */}
             <div className="flex border-b border-slate-200 bg-white sticky top-0 z-10 text-xs font-semibold overflow-x-auto">
               <button
-                onClick={() => setDesignerTab('paper')}
-                className={`px-3.5 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
-                  designerTab === 'paper'
-                    ? 'border-amber-500 text-amber-900 bg-amber-50/50'
+                onClick={() => setDesignerTab('elements')}
+                className={`px-3 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
+                  designerTab === 'elements'
+                    ? 'border-amber-500 text-amber-900 bg-amber-50/50 font-bold'
                     : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}
               >
-                1. Ukuran Kertas
+                1. Desain &amp; Isi Label
+              </button>
+              <button
+                onClick={() => setDesignerTab('paper')}
+                className={`px-3 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
+                  designerTab === 'paper'
+                    ? 'border-amber-500 text-amber-900 bg-amber-50/50 font-bold'
+                    : 'border-transparent text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                2. Kertas &amp; Fit Paper
               </button>
               <button
                 onClick={() => setDesignerTab('header')}
-                className={`px-3.5 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
+                className={`px-3 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
                   designerTab === 'header'
-                    ? 'border-amber-500 text-amber-900 bg-amber-50/50'
+                    ? 'border-amber-500 text-amber-900 bg-amber-50/50 font-bold'
                     : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}
               >
-                2. Kop & Banner
+                3. Kop
               </button>
               <button
                 onClick={() => setDesignerTab('barcode')}
-                className={`px-3.5 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
+                className={`px-3 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
                   designerTab === 'barcode'
-                    ? 'border-amber-500 text-amber-900 bg-amber-50/50'
+                    ? 'border-amber-500 text-amber-900 bg-amber-50/50 font-bold'
                     : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}
               >
-                3. Barcode & QR
+                4. Barcode/QR
               </button>
               <button
                 onClick={() => setDesignerTab('text')}
-                className={`px-3.5 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
+                className={`px-3 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
                   designerTab === 'text'
-                    ? 'border-amber-500 text-amber-900 bg-amber-50/50'
+                    ? 'border-amber-500 text-amber-900 bg-amber-50/50 font-bold'
                     : 'border-transparent text-slate-600 hover:text-slate-900'
                 }`}
               >
-                4. Teks & Judul
-              </button>
-              <button
-                onClick={() => setDesignerTab('meta')}
-                className={`px-3.5 py-2.5 border-b-2 whitespace-nowrap transition-colors ${
-                  designerTab === 'meta'
-                    ? 'border-amber-500 text-amber-900 bg-amber-50/50'
-                    : 'border-transparent text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                5. Badge Info
+                5. Font Teks
               </button>
             </div>
 
             {/* TAB CONTENTS */}
             <div className="p-4 sm:p-5 space-y-5 text-xs text-slate-700 flex-1">
               
-              {/* TAB 1: UKURAN KERTAS & BINGKAI */}
+              {/* TAB 1: DESAIN LABEL (PILIHAN APA SAJA YANG DITAMPILKAN DI LABEL) */}
+              {designerTab === 'elements' && (
+                <div className="space-y-4">
+                  {/* Preset Cepat Isi Label */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                    <div className="font-bold text-slate-900 flex items-center justify-between">
+                      <span>Preset Cepat Tampilan Isi Label:</span>
+                      <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                        1-Klik Pilih Elemen
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCurrentTemplate((prev) => ({
+                            ...prev,
+                            design: {
+                              ...prev.design,
+                              showHeader: true,
+                              showLogo: true,
+                              showPrimaryCode: true,
+                              showName: true,
+                              showBarcodeGraphic: true,
+                              showBarcodeText: true,
+                              showLocation: true,
+                              showCategory: true,
+                              showStock: true,
+                              showSafetyStock: true,
+                              showUnit: true,
+                              showZone: true,
+                              showDescription: true,
+                              showFooter: true,
+                              showDate: true,
+                            },
+                          }))
+                        }
+                        className="p-2 rounded-lg border border-slate-200 hover:border-amber-500 hover:bg-amber-50/40 text-left transition-all"
+                      >
+                        <div className="font-bold text-slate-900">Semua Informasi Lengkap</div>
+                        <div className="text-[10px] text-slate-500">
+                          Kop + Material Code + Nama + Barcode + Rak + Stok + Min + Tanggal
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCurrentTemplate((prev) => ({
+                            ...prev,
+                            design: {
+                              ...prev.design,
+                              showHeader: true,
+                              showLogo: true,
+                              showPrimaryCode: true,
+                              showName: true,
+                              showBarcodeGraphic: true,
+                              showBarcodeText: true,
+                              showLocation: true,
+                              showCategory: true,
+                              showStock: false,
+                              showSafetyStock: true,
+                              showUnit: false,
+                              showZone: true,
+                              showDescription: false,
+                              showFooter: true,
+                              showDate: false,
+                            },
+                          }))
+                        }
+                        className="p-2 rounded-lg border border-slate-200 hover:border-amber-500 hover:bg-amber-50/40 text-left transition-all"
+                      >
+                        <div className="font-bold text-slate-900">Standar Store &amp; Rak</div>
+                        <div className="text-[10px] text-slate-500">
+                          Kop + Material Code + Nama + Barcode + Lokasi Rak + Stok Min
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCurrentTemplate((prev) => ({
+                            ...prev,
+                            design: {
+                              ...prev.design,
+                              showHeader: false,
+                              showLogo: false,
+                              showPrimaryCode: true,
+                              showName: true,
+                              showBarcodeGraphic: true,
+                              showBarcodeText: true,
+                              showLocation: true,
+                              showCategory: false,
+                              showStock: false,
+                              showSafetyStock: false,
+                              showUnit: false,
+                              showZone: false,
+                              showDescription: false,
+                              showFooter: true,
+                              showDate: false,
+                            },
+                          }))
+                        }
+                        className="p-2 rounded-lg border border-slate-200 hover:border-amber-500 hover:bg-amber-50/40 text-left transition-all"
+                      >
+                        <div className="font-bold text-slate-900">Ringkas (Barcode + Nama + Rak)</div>
+                        <div className="text-[10px] text-slate-500">
+                          Tanpa Kop, fokus ke Barcode, Material Code, Nama &amp; Rak
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCurrentTemplate((prev) => ({
+                            ...prev,
+                            design: {
+                              ...prev.design,
+                              showHeader: false,
+                              showLogo: false,
+                              showPrimaryCode: true,
+                              showName: false,
+                              showBarcodeGraphic: true,
+                              showBarcodeText: true,
+                              showLocation: false,
+                              showCategory: false,
+                              showStock: false,
+                              showSafetyStock: false,
+                              showUnit: false,
+                              showZone: false,
+                              showDescription: false,
+                              showFooter: false,
+                              showDate: false,
+                            },
+                          }))
+                        }
+                        className="p-2 rounded-lg border border-slate-200 hover:border-amber-500 hover:bg-amber-50/40 text-left transition-all"
+                      >
+                        <div className="font-bold text-slate-900">Minimalis (Hanya Barcode &amp; Material Code)</div>
+                        <div className="text-[10px] text-slate-500">
+                          Khusus komponen kecil / scan cepat
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Checklist Lengkap Pilihan Apa Saja yang Ditampilkan di Label */}
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-2.5">
+                    <div className="font-bold text-slate-900">
+                      Centang Elemen yang Ingin Ditampilkan di Label:
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            1. Kop / Header Nama Perusahaan
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan nama perusahaan atau judul banner di bagian atas label
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showHeader}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showHeader: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            2. Logo / Inisial Perusahaan di Kop
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan logo hitam-putih di sebelah kiri kop label
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showLogo}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showLogo: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            3. Kode Utama (Material Code Barang / Kode Rak)
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Judul kode utama dengan huruf tebal di atas barcode
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showPrimaryCode !== false}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showPrimaryCode: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            4. Nama Barang / Nama Lokasi Rak
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Deskripsi nama lengkap barang atau nama rak penyimpanan
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showName}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showName: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            5. Grafik Garis Barcode 1D / Matriks QR Code
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Simbol garis Code-128 atau QR Code untuk dipindai scanner
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showBarcodeGraphic !== false}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showBarcodeGraphic: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            6. Teks Kode di Bawah Garis Barcode
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Teks kode human-readable tepat di bawah grafik garis barcode
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showBarcodeText}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showBarcodeText: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            7. Lokasi Rak Penyimpanan (Contoh: Rak: A-01)
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Badge kode rak tempat barang disimpan di Store
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showLocation}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showLocation: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            8. Kategori / Sub-Master Barang
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Badge kategori barang (Sparepart Mesin, Elektrikal, dsb)
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showCategory}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showCategory: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            9. Batas Stok Minimum / Safety Stock (Min: X Unit)
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan informasi batas stok minimum barang pada stiker
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showSafetyStock}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showSafetyStock: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            10. Jumlah Saldo Stok Fisik Saat Ini
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan angka saldo stok aktual saat label dicetak
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showStock}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showStock: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            11. Satuan Barang (UOM: Pcs / Box / Liter)
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan badge satuan hitung barang
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(currentTemplate.design.showUnit)}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showUnit: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            12. Zona / Area Wilayah Store (Untuk Label Rak)
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan nama zona penyimpanan pada stiker rak
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showZone}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showZone: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            13. Keterangan / Spesifikasi Tambahan
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan catatan spesifikasi barang atau posisi rak
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showDescription}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showDescription: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            14. Tanggal Cetak Label
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan tanggal cetak stiker (DD/MM/YYYY)
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showDate}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showDate: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+
+                      <label className="flex items-center justify-between p-2 bg-slate-50 hover:bg-slate-100 rounded-lg cursor-pointer border border-slate-200/70">
+                        <div>
+                          <div className="font-semibold text-slate-900">
+                            15. Baris Footer Bawah &amp; Teks Kustom
+                          </div>
+                          <div className="text-[10.5px] text-slate-500">
+                            Menampilkan baris informasi tambahan &amp; catatan kaki di bagian bawah
+                          </div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={currentTemplate.design.showFooter !== false}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, showFooter: e.target.checked },
+                            }))
+                          }
+                          className="w-4 h-4 accent-amber-500 rounded shrink-0"
+                        />
+                      </label>
+                    </div>
+
+                    {currentTemplate.design.showFooter !== false && (
+                      <div className="pt-2 border-t border-slate-100">
+                        <span className="text-[11px] text-slate-500 block mb-1">
+                          Teks Catatan Kaki Kustom (Pojok Kanan Bawah):
+                        </span>
+                        <input
+                          type="text"
+                          value={currentTemplate.design.customFooterText}
+                          onChange={(e) =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: {
+                                ...prev.design,
+                                customFooterText: e.target.value,
+                              },
+                            }))
+                          }
+                          placeholder="Contoh: STORE RESMI / QC PASSED"
+                          className="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-semibold text-slate-900"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: UKURAN KERTAS & FIT TO PAPER */}
               {designerTab === 'paper' && (
                 <div className="space-y-4">
+                  {/* FIT TO PAPER PANEL */}
+                  <div className="bg-emerald-50/80 p-3.5 rounded-xl border border-emerald-300 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-emerald-950 flex items-center gap-1.5">
+                          <Maximize2 className="w-4 h-4 text-emerald-600" />
+                          <span>Fitur Fit to Paper (Otomatis Sesuaikan Kertas)</span>
+                        </div>
+                        <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
+                          Menyesuaikan ukuran barcode, tinggi huruf, dan tata letak secara otomatis agar pas 100% di dalam batas kertas stiker tanpa terpotong.
+                        </p>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={currentTemplate.design.fitToPaper !== false}
+                        onChange={(e) =>
+                          setCurrentTemplate((prev) => ({
+                            ...prev,
+                            design: { ...prev.design, fitToPaper: e.target.checked },
+                          }))
+                        }
+                        className="w-4 h-4 accent-emerald-600 rounded mt-0.5 shrink-0"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleApplyFitToPaperNow}
+                        className="w-full py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition-colors"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Optimalkan Semua Elemen agar Fit to Paper ({currentTemplate.pageSize.widthMm}×{currentTemplate.pageSize.heightMm}mm)</span>
+                      </button>
+                    </div>
+
+                    <div className="pt-2 border-t border-emerald-200/80">
+                      <span className="text-[11px] font-bold text-emerald-950 block mb-1.5">
+                        Mode Kertas Printer Saat Cetak:
+                      </span>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, paperPrintMode: 'thermal_roll' },
+                            }))
+                          }
+                          className={`p-2 rounded-lg border text-left transition-all ${
+                            (currentTemplate.design.paperPrintMode || 'thermal_roll') ===
+                            'thermal_roll'
+                              ? 'bg-slate-900 text-white border-slate-900 font-bold'
+                              : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-100/50'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">Roll Stiker Thermal (1:1)</div>
+                          <div className="text-[10px] opacity-80">
+                            Fit 1 label per halaman roll ({currentTemplate.pageSize.widthMm}×{currentTemplate.pageSize.heightMm}mm)
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCurrentTemplate((prev) => ({
+                              ...prev,
+                              design: { ...prev.design, paperPrintMode: 'a4_sheet' },
+                            }))
+                          }
+                          className={`p-2 rounded-lg border text-left transition-all ${
+                            currentTemplate.design.paperPrintMode === 'a4_sheet'
+                              ? 'bg-slate-900 text-white border-slate-900 font-bold'
+                              : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-100/50'
+                          }`}
+                        >
+                          <div className="text-xs font-bold">Lembar Kertas A4 (Multi-Grid)</div>
+                          <div className="text-[10px] opacity-80">
+                            Susun otomatis banyak label pas di kertas A4
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                   <div>
                     <label className="block text-xs font-bold text-slate-900 mb-1.5">
                       Pilihan Ukuran Stiker Roll (Preset Clabel & Thermal)
@@ -963,7 +1671,7 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
               {designerTab === 'text' && (
                 <div className="space-y-4">
                   <div className="bg-white p-3.5 rounded-xl border border-slate-200 space-y-3">
-                    <div className="font-bold text-slate-900">Kode Utama (SKU Barang / Kode Rak):</div>
+                    <div className="font-bold text-slate-900">Kode Utama (Material Code Barang / Kode Rak):</div>
                     
                     <div>
                       <span className="text-[11px] text-slate-500 block mb-1">Ukuran Font Kode:</span>
@@ -1334,19 +2042,31 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
                 </span>
               </div>
 
-              <button
-                onClick={handlePrint}
-                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl shadow-xs transition-colors shrink-0"
-              >
-                <Printer className="w-4 h-4" />
-                <span>Cetak Thermal Sekarang</span>
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPrintSheetPreviewOpen(true)}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-300 font-bold rounded-xl shadow-xs transition-colors shrink-0"
+                >
+                  <Eye className="w-4 h-4" />
+                  <span>Preview Sebelum Cetak ({totalStickerCount} Label)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl shadow-xs transition-colors shrink-0"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Cetak Thermal Sekarang</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
 
         {/* PRINT OUTPUT SECTION (ONLY VISIBLE DURING window.print()) */}
-        <div className="hidden print:block bg-white text-black">
+        <div className="hidden print:block bg-white text-black clabel-print-container">
           {stickerDataList.map((stkData, sIdx) =>
             Array.from({ length: copiesPerSticker }).map((_, cIdx) => (
               <div
@@ -1438,6 +2158,201 @@ export const ThermalLabelDesignerModal: React.FC<ThermalLabelDesignerModalProps>
               >
                 Simpan Template
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PREVIEW SEBELUM CETAK BARCODE (FULL ROLL / SHEET PREVIEW) */}
+      {isPrintSheetPreviewOpen && (
+        <div className="no-print fixed inset-0 z-70 flex items-center justify-center bg-slate-950/85 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden">
+            {/* Header Preview Sebelum Cetak */}
+            <div className="px-5 py-4 bg-slate-900 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-slate-950 flex items-center justify-center font-bold shrink-0">
+                  <Eye className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold">
+                      Preview Sebelum Cetak Barcode ({totalStickerCount} Stiker)
+                    </h3>
+                    <span className="px-2 py-0.5 rounded bg-amber-400 text-slate-950 font-mono text-[10px] font-extrabold">
+                      {currentTemplate.pageSize.widthMm} × {currentTemplate.pageSize.heightMm} mm
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300">
+                    Periksa seluruh tampilan stiker barcode ({stickerDataList.length} item ×{' '}
+                    {copiesPerSticker} salinan) sebelum dikirim ke printer thermal
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="inline-flex p-0.5 bg-slate-800 rounded-lg border border-slate-700 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setSheetPreviewLayout('roll')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                      sheetPreviewLayout === 'roll'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    Simulasi Roll Termal (1 Kolom)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSheetPreviewLayout('grid')}
+                    className={`px-2.5 py-1 rounded-md font-semibold transition-colors ${
+                      sheetPreviewLayout === 'grid'
+                        ? 'bg-amber-400 text-slate-950'
+                        : 'text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    Tampilan Grid Lembar
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-1 bg-slate-800 px-2 py-1 rounded-lg border border-slate-700 text-xs">
+                  {[0.9, 1.15, 1.4].map((zm) => (
+                    <button
+                      key={zm}
+                      type="button"
+                      onClick={() => setSheetPreviewZoom(zm)}
+                      className={`px-2 py-0.5 rounded font-mono text-[11px] font-bold ${
+                        sheetPreviewZoom === zm
+                          ? 'bg-emerald-400 text-slate-950'
+                          : 'text-slate-300 hover:text-white'
+                      }`}
+                    >
+                      {Math.round(zm * 100)}%
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsPrintSheetPreviewOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Summary Strip */}
+            <div className="px-5 py-2.5 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-3 text-slate-700">
+                <span>
+                  Template: <strong>{currentTemplate.name}</strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Tipe Kode:{' '}
+                  <strong>
+                    {currentTemplate.design.barcodeType === 'qrcode'
+                      ? '2D QR Code'
+                      : '1D Code 128 Barcode'}
+                  </strong>
+                </span>
+                <span>•</span>
+                <span>
+                  Total Cetak: <strong>{totalStickerCount} Stiker</strong>
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-slate-600 font-medium">Ubah Jumlah Salinan:</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={copiesPerSticker}
+                  onChange={(e) =>
+                    setCopiesPerSticker(Math.max(1, parseInt(e.target.value) || 1))
+                  }
+                  className="w-16 px-2 py-1 bg-white border border-slate-300 rounded text-center font-mono font-bold text-slate-900"
+                />
+              </div>
+            </div>
+
+            {/* Scrollable All-Stickers Preview Canvas */}
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-200/90">
+              <div
+                className={
+                  sheetPreviewLayout === 'roll'
+                    ? 'flex flex-col items-center gap-5 max-w-md mx-auto py-2 px-6 bg-slate-300/70 rounded-2xl border-x-8 border-dashed border-slate-400'
+                    : 'flex flex-wrap items-start justify-center gap-5'
+                }
+              >
+                {stickerDataList.flatMap((stkData, sIdx) =>
+                  Array.from({ length: copiesPerSticker }).map((_, cIdx) => {
+                    const stickerNumber = sIdx * copiesPerSticker + cIdx + 1;
+                    const codeLabel =
+                      stkData.type === 'item' ? stkData.item.sku : stkData.location.code;
+                    return (
+                      <div
+                        key={`sheet-prev-${sIdx}-${cIdx}`}
+                        className="flex flex-col items-center"
+                      >
+                        <div className="mb-1.5 flex items-center gap-2 text-[10.5px] font-mono font-bold text-slate-700 bg-white/90 px-2.5 py-0.5 rounded-full border border-slate-300 shadow-2xs">
+                          <span>Stiker #{stickerNumber}</span>
+                          <span>•</span>
+                          <span className="text-slate-900">{codeLabel}</span>
+                          {copiesPerSticker > 1 && (
+                            <span className="text-amber-700">
+                              (Copy {cIdx + 1}/{copiesPerSticker})
+                            </span>
+                          )}
+                        </div>
+                        <div className="bg-white p-1.5 rounded-xl shadow-lg border-2 border-slate-400">
+                          <ThermalStickerRenderer
+                            template={currentTemplate}
+                            data={stkData}
+                            companyName={
+                              companyProfile.companyName || 'PT. ABADI AGROSINDO PERSADA'
+                            }
+                            logoUrl={companyProfile.logoUrl}
+                            isPrint={false}
+                            scale={sheetPreviewZoom}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* Footer Action Buttons */}
+            <div className="px-6 py-4 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0">
+              <div className="text-xs text-slate-300">
+                Pastikan ukuran kertas printer diset ke{' '}
+                <strong className="text-amber-300">
+                  {currentTemplate.pageSize.widthMm} × {currentTemplate.pageSize.heightMm} mm
+                </strong>{' '}
+                dengan Margin <strong>None / 0</strong>.
+              </div>
+
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsPrintSheetPreviewOpen(false)}
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-semibold transition-colors"
+                >
+                  Kembali ke Pengaturan Desain
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="px-5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 text-xs font-extrabold flex items-center gap-2 shadow-md transition-colors"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Lanjutkan Cetak {totalStickerCount} Stiker Sekarang</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

@@ -1,7 +1,13 @@
 import React, { useState, useMemo } from 'react';
 import * as XLSX from 'xlsx';
 import { useInventory } from '../context/InventoryContext';
-import { ActivityLogCategory } from '../types/inventory';
+import {
+  ActivityLogCategory,
+  UserRole,
+  canViewAuditLogOfRole,
+  getRoleShortBadge,
+  getRoleLabel,
+} from '../types/inventory';
 import {
   Activity,
   Search,
@@ -16,14 +22,22 @@ import {
 } from 'lucide-react';
 
 export const SystemActivityLogView: React.FC = () => {
-  const { activityLogs } = useInventory();
+  const { activityLogs, currentUser } = useInventory();
+
+  const viewerRole: UserRole = currentUser?.role || 'viewer';
 
   const [selectedCategory, setSelectedCategory] = useState<'ALL' | ActivityLogCategory>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'ALL' | 'admin' | 'kepala_gudang' | 'user'>('ALL');
+  const [roleFilter, setRoleFilter] = useState<'ALL' | UserRole>('ALL');
+
+  // Filter logs according to 5-level hierarchy rule:
+  // Level 0 sees all logs; Level 1 sees logs of Level 2, 3, 4; Level 2 sees logs of Level 3, 4.
+  const roleAuthorizedLogs = useMemo(() => {
+    return activityLogs.filter((log) => canViewAuditLogOfRole(viewerRole, log.actorRole));
+  }, [activityLogs, viewerRole]);
 
   const filteredLogs = useMemo(() => {
-    return activityLogs.filter((log) => {
+    return roleAuthorizedLogs.filter((log) => {
       if (selectedCategory !== 'ALL' && log.category !== selectedCategory) return false;
       if (roleFilter !== 'ALL' && log.actorRole !== roleFilter) return false;
 
@@ -40,18 +54,18 @@ export const SystemActivityLogView: React.FC = () => {
       }
       return true;
     });
-  }, [activityLogs, selectedCategory, roleFilter, searchQuery]);
+  }, [roleAuthorizedLogs, selectedCategory, roleFilter, searchQuery]);
 
-  // Summary metrics
+  // Summary metrics based on authorized logs
   const counts = useMemo(() => {
     return {
-      total: activityLogs.length,
-      stock: activityLogs.filter((l) => l.category === 'STOCK_ADJUSTMENT').length,
-      approval: activityLogs.filter((l) => l.category === 'APPROVAL_WORKFLOW').length,
-      user: activityLogs.filter((l) => l.category === 'USER_CHANGE').length,
-      master: activityLogs.filter((l) => l.category === 'MASTER_DATA').length,
+      total: roleAuthorizedLogs.length,
+      stock: roleAuthorizedLogs.filter((l) => l.category === 'STOCK_ADJUSTMENT').length,
+      approval: roleAuthorizedLogs.filter((l) => l.category === 'APPROVAL_WORKFLOW').length,
+      user: roleAuthorizedLogs.filter((l) => l.category === 'USER_CHANGE').length,
+      master: roleAuthorizedLogs.filter((l) => l.category === 'MASTER_DATA').length,
     };
-  }, [activityLogs]);
+  }, [roleAuthorizedLogs]);
 
   const formatDateTime = (iso: string) => {
     try {
@@ -80,7 +94,7 @@ export const SystemActivityLogView: React.FC = () => {
       'No. Referensi',
       'Pelaku (Actor)',
       'Username',
-      'Role',
+      'Level & Role',
       'Rincian Jejak Audit',
     ];
     const rows = filteredLogs.map((l, idx) => [
@@ -92,7 +106,7 @@ export const SystemActivityLogView: React.FC = () => {
       l.referenceNumber || '-',
       l.actorName,
       l.actorUsername || '-',
-      l.actorRole.toUpperCase(),
+      getRoleShortBadge(l.actorRole),
       l.description,
     ]);
 
@@ -106,7 +120,7 @@ export const SystemActivityLogView: React.FC = () => {
       { wch: 18 },
       { wch: 22 },
       { wch: 15 },
-      { wch: 16 },
+      { wch: 22 },
       { wch: 65 },
     ];
     XLSX.utils.book_append_sheet(wb, ws, 'System Activity Log');
@@ -146,6 +160,11 @@ export const SystemActivityLogView: React.FC = () => {
     }
   };
 
+  const visibleRoleTabs = useMemo(() => {
+    const allRoles: UserRole[] = ['superuser', 'kepala_gudang', 'admin', 'user', 'viewer'];
+    return allRoles.filter((r) => canViewAuditLogOfRole(viewerRole, r));
+  }, [viewerRole]);
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -158,13 +177,17 @@ export const SystemActivityLogView: React.FC = () => {
             <div>
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-700 mb-0.5">
                 <ShieldCheck className="w-3.5 h-3.5" />
-                <span>System Activity Log &amp; Audit Traceability</span>
+                <span>
+                  System Activity Log &amp; Audit Traceability ({getRoleShortBadge(viewerRole)})
+                </span>
               </div>
               <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Log Aktivitas Sistem &amp; Jejak Audit Terpadu
+                Log Aktivitas Sistem &amp; Jejak Audit Level di Bawahnya
               </h1>
               <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-2xl">
-                Rekam jejak historis seluruh tindakan utama di sistem: penyesuaian stok fisik (LPB &amp; SIV), perubahan akun pengguna, pembaruan Cost Center/GL, serta riwayat persetujuan (ACC) dokumen.
+                {viewerRole === 'superuser'
+                  ? 'Sebagai Level 0 Super User, Anda dapat memantau seluruh jejak audit dari semua level pengguna (Level 0 s/d Level 4).'
+                  : `Sebagai ${getRoleLabel(viewerRole)}, Anda melihat rekam jejak aktivitas dan audit untuk level pengguna di bawah Anda.`}
               </p>
             </div>
           </div>
@@ -261,10 +284,20 @@ export const SystemActivityLogView: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex items-center gap-1.5 text-slate-600 font-medium">
               <Filter className="w-3.5 h-3.5 text-slate-400" />
-              <span>Peran Pelaku:</span>
+              <span>Filter Level Pelaku:</span>
             </div>
-            <div className="flex items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
-              {(['ALL', 'admin', 'kepala_gudang', 'user'] as const).map((r) => (
+            <div className="flex flex-wrap items-center gap-1 p-0.5 bg-slate-100 rounded-lg">
+              <button
+                onClick={() => setRoleFilter('ALL')}
+                className={`px-2.5 py-1 rounded-md font-medium transition-colors ${
+                  roleFilter === 'ALL'
+                    ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Semua Level Bawah
+              </button>
+              {visibleRoleTabs.map((r) => (
                 <button
                   key={r}
                   onClick={() => setRoleFilter(r)}
@@ -274,13 +307,7 @@ export const SystemActivityLogView: React.FC = () => {
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  {r === 'ALL'
-                    ? 'Semua Role'
-                    : r === 'admin'
-                    ? 'Admin Gudang'
-                    : r === 'kepala_gudang'
-                    ? 'Kepala Gudang'
-                    : 'Staf / Pemohon'}
+                  {getRoleShortBadge(r)}
                 </button>
               ))}
             </div>
@@ -309,14 +336,14 @@ export const SystemActivityLogView: React.FC = () => {
                 <th className="px-4 py-3 w-44">Kategori Audit</th>
                 <th className="px-4 py-3 w-36">No. Referensi</th>
                 <th className="px-4 py-3">Rincian Aktivitas &amp; Perubahan</th>
-                <th className="px-4 py-3 w-48">Pelaku (Actor)</th>
+                <th className="px-4 py-3 w-52">Pelaku (Actor)</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filteredLogs.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-12 text-center text-slate-400">
-                    Tidak ada catatan aktivitas yang cocok dengan filter pencarian.
+                    Tidak ada catatan aktivitas level di bawah Anda yang cocok dengan filter pencarian.
                   </td>
                 </tr>
               ) : (
@@ -350,7 +377,15 @@ export const SystemActivityLogView: React.FC = () => {
                       <div className="flex items-center gap-2">
                         <div
                           className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-[10px] text-white shrink-0 ${
-                            log.actorRole === 'admin' ? 'bg-emerald-600' : 'bg-amber-600'
+                            log.actorRole === 'superuser'
+                              ? 'bg-purple-600'
+                              : log.actorRole === 'kepala_gudang'
+                              ? 'bg-blue-600'
+                              : log.actorRole === 'admin'
+                              ? 'bg-emerald-600'
+                              : log.actorRole === 'user'
+                              ? 'bg-amber-600'
+                              : 'bg-slate-500'
                           }`}
                         >
                           {log.actorName.charAt(0)}
@@ -361,14 +396,8 @@ export const SystemActivityLogView: React.FC = () => {
                           </div>
                           <div className="text-[10px] text-slate-500 font-mono">
                             @{log.actorUsername || 'user'} &middot;{' '}
-                            <span
-                              className={
-                                log.actorRole === 'admin'
-                                  ? 'text-emerald-700 font-bold'
-                                  : 'text-amber-700 font-bold'
-                              }
-                            >
-                              {log.actorRole.toUpperCase()}
+                            <span className="font-bold text-slate-700">
+                              {getRoleShortBadge(log.actorRole)}
                             </span>
                           </div>
                         </div>

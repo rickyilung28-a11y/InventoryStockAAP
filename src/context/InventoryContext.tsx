@@ -17,6 +17,19 @@ import {
   SystemActivityLog,
   ActivityLogCategory,
   MovementVelocityCategory,
+  UserPermissions,
+  RoleLevelDefinition,
+  INITIAL_ROLE_DEFINITIONS,
+  setDynamicRoleDefinitions,
+  normalizeGudangToStoreText,
+  getEffectivePermissions,
+  canManageTargetRole,
+  getRoleLabel,
+  getRoleLevel,
+  getDefaultPermissionsForRole,
+  StockOpnameSession,
+  StockOpnameItemEntry,
+  LocationTransferRequest,
 } from '../types/inventory';
 import {
   INITIAL_USERS,
@@ -33,6 +46,11 @@ import {
   INITIAL_ACTIVITY_LOGS,
 } from '../data/mockData';
 import { realtimeService, RealtimeEventPayload } from '../services/realtimeService';
+import {
+  testFirestoreConnection,
+  saveInventoryStateToFirestore,
+  subscribeToFirestoreInventoryState,
+} from '../lib/firebase';
 
 interface ToastInfo {
   id: string;
@@ -40,13 +58,54 @@ interface ToastInfo {
   title: string;
   message: string;
   voucherNumber?: string;
+  itemsPreview?: {
+    sku: string;
+    name: string;
+    currentStock: number;
+    minStock: number;
+    unit: string;
+    status: 'CRITICAL' | 'WARNING';
+  }[];
+  actionLabel?: string;
+  onAction?: () => void;
+  secondaryActionLabel?: string;
+  onSecondaryAction?: () => void;
+  durationMs?: number;
 }
 
 interface InventoryContextType {
   currentUser: UserAccount | null;
   users: UserAccount[];
+  publicAccessMode: boolean;
+  setPublicAccessMode: (enabled: boolean) => void;
+  loginAsPublicGuest: (params: {
+    name: string;
+    department: string;
+    role?: UserRole;
+  }) => UserAccount;
   login: (username: string, password: string) => { success: boolean; error?: string; user?: UserAccount };
   logout: () => void;
+  syncStatus: {
+    connected: boolean;
+    isSyncing?: boolean;
+    revision: number;
+    lastActionSummary: string;
+    lastSyncAt?: string;
+    sqlSynced?: boolean;
+    hasError?: boolean;
+    errorMessage?: string;
+    connectedDevices: {
+      clientId: string;
+      deviceType: 'ANDROID' | 'WEBSITE';
+      userName: string;
+      userRole: string;
+      deviceName?: string;
+    }[];
+  };
+  forceSyncNow: () => Promise<void>;
+  setDeviceMode: (mode: 'ANDROID' | 'WEBSITE') => void;
+  showToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
+  showCustomToast: (toast: Omit<ToastInfo, 'id'>) => void;
   createUser: (userData: {
     username: string;
     password: string;
@@ -54,11 +113,23 @@ interface InventoryContextType {
     role: UserRole;
     department: string;
     email?: string;
+    permissions?: Partial<UserPermissions>;
   }) => { success: boolean; error?: string; user?: UserAccount };
   updateUser: (userId: string, updates: Partial<UserAccount>) => { success: boolean; error?: string };
-  resetUserPassword: (userId: string, newPassword: string) => { success: boolean; error?: string };
+  resetUserPassword: (userId: string, newPassword: string, newUsername?: string) => { success: boolean; error?: string };
   deleteUser: (userId: string) => { success: boolean; error?: string };
   toggleUserStatus: (userId: string) => { success: boolean; error?: string };
+  reorganizeUsersByLevel: (resetPermissionsToDefault?: boolean) => void;
+
+  // Dynamic Role / Level Categories (Superuser Manageable)
+  roleDefinitions: RoleLevelDefinition[];
+  addRoleDefinition: (def: RoleLevelDefinition) => { success: boolean; error?: string };
+  updateRoleDefinition: (roleKey: string, updates: Partial<RoleLevelDefinition>) => { success: boolean; error?: string };
+  deleteRoleDefinition: (roleKey: string) => { success: boolean; error?: string };
+
+  // Superuser Master Database Access
+  updateDatabaseCollection: (collectionName: string, data: unknown) => { success: boolean; error?: string };
+  replaceEntireDatabase: (dump: Record<string, unknown>) => Promise<{ success: boolean; error?: string }>;
 
   stockItems: StockItem[];
   lpbDocuments: LPBDocument[];
@@ -237,9 +308,13 @@ interface InventoryContextType {
   getItemMovementAnalytics: (itemId: string, sku?: string) => {
     totalOutQty: number;
     outFrequency: number;
+    outboundFrequency: number;
     lastOutDate?: string;
     velocityCategory: MovementVelocityCategory;
+    category: MovementVelocityCategory;
     velocityLabel: 'Fast Moving' | 'Medium Moving' | 'Low Moving';
+    label: 'Fast Moving' | 'Medium Moving' | 'Low Moving';
+    turnoverRatio: number;
   };
 
   // System Activity Log (Audit Trail)
@@ -252,19 +327,58 @@ interface InventoryContextType {
     referenceNumber?: string;
   }) => void;
 
+  // Stock Opname & Lock Stok Store (Level 1 Kepala Store ke atas)
+  stockOpnameSessions: StockOpnameSession[];
+  activeStockOpname: StockOpnameSession | null;
+  isStockLockedForOpname: boolean;
+  startStockOpname: (params: {
+    title: string;
+    notes?: string;
+  }) => { success: boolean; session?: StockOpnameSession; error?: string };
+  scanOrUpdateOpnameItem: (params: {
+    skuOrId: string;
+    physicalStock?: number;
+    incrementByOne?: boolean;
+    barcodeScanned?: boolean;
+    verifiedLocation?: string;
+    notes?: string;
+  }) => { success: boolean; entry?: StockOpnameItemEntry; error?: string };
+  completeStockOpname: (params: {
+    applyAdjustment: boolean;
+    notes?: string;
+  }) => { success: boolean; error?: string };
+  cancelStockOpname: (reason?: string) => { success: boolean; error?: string };
+
+  // Pindah Lokasi Barang (Admin Mengajukan -> Terealisasi saat Di-ACC Kepala Store)
+  locationTransferRequests: LocationTransferRequest[];
+  createLocationTransferRequest: (params: {
+    itemId: string;
+    toLocation: string;
+    reason: string;
+  }) => { success: boolean; request?: LocationTransferRequest; error?: string };
+  approveLocationTransferRequest: (
+    requestId: string,
+    approvalNotes?: string
+  ) => { success: boolean; error?: string };
+  rejectLocationTransferRequest: (
+    requestId: string,
+    rejectionReason: string
+  ) => { success: boolean; error?: string };
+
   // Print preview state
   selectedDocumentForPrint: { type: 'LPB' | 'NPB'; doc: LPBDocument | IssueVoucherDocument } | null;
   openPrintPreview: (type: 'LPB' | 'NPB', doc: LPBDocument | IssueVoucherDocument) => void;
   closePrintPreview: () => void;
 
   resetToDefaultData: () => void;
+  resetAllTransactionsAndStock: (mode?: 'EMPTY_ALL' | 'ZERO_STOCK_ONLY') => Promise<void>;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'inv_current_user_id',
-  USERS: 'inv_users_list_v2',
+  USERS: 'inv_users_list_v5',
   STOCK_ITEMS: 'inv_stock_items_v2',
   LPB_DOCS: 'inv_lpb_docs_v2',
   ISSUE_VOUCHERS: 'inv_issue_vouchers_v2',
@@ -273,36 +387,192 @@ const STORAGE_KEYS = {
   COST_CENTERS: 'inv_cost_centers_v2',
   GL_ACCOUNTS: 'inv_gl_accounts_v2',
   STORAGE_LOCATIONS: 'inv_storage_locations_v2',
-  COMPANY_PROFILE: 'inv_company_profile_v2',
+  COMPANY_PROFILE: 'inv_company_profile_v4',
   MIN_STOCK_PROPOSALS: 'inv_min_stock_proposals_v2',
   ACTIVITY_LOGS: 'inv_activity_logs_v2',
+  PUBLIC_ACCESS_MODE: 'inv_public_access_mode_v1',
+  ROLE_DEFINITIONS: 'inv_role_definitions_v3',
+  STOCK_OPNAME_SESSIONS: 'inv_stock_opname_sessions_v1',
+  LOCATION_TRANSFER_REQUESTS: 'inv_location_transfers_v1',
 };
 
+function normalizeCompanyProfile(raw?: Partial<CompanyProfile> | null): CompanyProfile {
+  if (!raw || typeof raw !== 'object') return INITIAL_COMPANY_PROFILE;
+  const isLegacyAddress =
+    !raw.address ||
+    raw.address.trim() === 'Kawasan Industri & Pergudangan Lingkar Timur, Sidoarjo - Jawa Timur';
+  const isLegacyPhone = raw.phone === '(031) 895-2001';
+  const isLegacyEmail = raw.email === 'logistik.sidoarjo@agrosindo.co.id';
+  const isLegacyLogo =
+    !raw.logoUrl ||
+    raw.logoUrl === '/assets/aistudio/IMG_20261011_230510_dc5f2550.jpg';
+
+  return {
+    ...INITIAL_COMPANY_PROFILE,
+    ...raw,
+    companyName: raw.companyName?.trim() || INITIAL_COMPANY_PROFILE.companyName,
+    city: raw.city?.trim() || INITIAL_COMPANY_PROFILE.city,
+    address: isLegacyAddress ? INITIAL_COMPANY_PROFILE.address : (raw.address ?? ''),
+    phone: isLegacyPhone ? '' : (raw.phone ?? ''),
+    email: isLegacyEmail ? '' : (raw.email ?? ''),
+    logoUrl: isLegacyLogo ? INITIAL_COMPANY_PROFILE.logoUrl : raw.logoUrl!,
+  };
+}
+
+const LEGACY_DEMO_USERNAMES = new Set(['budi', 'siti', 'rian', 'view']);
+const LEGACY_DEMO_NAMES = new Set([
+  'ir. hendrawan wijaya',
+  'suryadi',
+  'hendra gunawan',
+  'budi santoso',
+  'siti aminah',
+  'rian pratama',
+  'dimas saputra',
+]);
+
+function cleanUserDepartment(dept: string, role: UserRole): string {
+  const normalized = normalizeGudangToStoreText(dept || '')
+    .replace(/\s*\(Level\s*\d+\)/gi, '')
+    .replace(/^Level\s*\d+\s*[—-]\s*/i, '')
+    .trim();
+  if (!normalized || normalized.toLowerCase().includes('super user')) {
+    if (role === 'superuser') return 'management';
+  }
+  return normalized || 'Store';
+}
+
+function normalizeAndSortUsersByLevel(
+  rawList: UserAccount[],
+  resetPermissionsToDefault = false
+): UserAccount[] {
+  const seenIds = new Set<string>();
+  const seenUsernames = new Set<string>();
+  const dedupedRaw: UserAccount[] = [];
+
+  for (const u of rawList) {
+    if (!u || !u.id || !u.username) continue;
+    const idKey = String(u.id).trim();
+    const unameKey = String(u.username).trim().toLowerCase();
+    const nameKey = String(u.name || '').trim().toLowerCase();
+
+    // Skip obsolete old demo accounts so the new default accounts take their place
+    if (LEGACY_DEMO_USERNAMES.has(unameKey) || LEGACY_DEMO_NAMES.has(nameKey)) {
+      const replacement = INITIAL_USERS.find(
+        (initU) => initU.id === idKey || initU.username.toLowerCase() === unameKey
+      );
+      if (replacement) {
+        if (!seenIds.has(replacement.id) && !seenUsernames.has(replacement.username.toLowerCase())) {
+          seenIds.add(replacement.id);
+          seenUsernames.add(replacement.username.toLowerCase());
+          dedupedRaw.push(replacement);
+        }
+      }
+      continue;
+    }
+
+    if (seenIds.has(idKey) || seenUsernames.has(unameKey)) continue;
+    seenIds.add(idKey);
+    seenUsernames.add(unameKey);
+    dedupedRaw.push(u);
+  }
+
+  const mapped = dedupedRaw.map((u) => {
+    const cleanDept = cleanUserDepartment(u.department || '', u.role);
+    const defaultPerms = getDefaultPermissionsForRole(u.role);
+    return {
+      ...u,
+      department: cleanDept,
+      email: u.email ?? '',
+      permissions:
+        resetPermissionsToDefault || !u.permissions || u.role === 'superuser'
+          ? defaultPerms
+          : { ...defaultPerms, ...u.permissions },
+    };
+  });
+
+  const existingIds = new Set(mapped.map((u) => u.id));
+  const existingUsernames = new Set(mapped.map((u) => u.username.toLowerCase()));
+  const missingDefaults = INITIAL_USERS.filter(
+    (initUser) =>
+      !existingIds.has(initUser.id) &&
+      !existingUsernames.has(initUser.username.toLowerCase())
+  );
+  const combined = missingDefaults.length > 0 ? [...mapped, ...missingDefaults] : mapped;
+
+  const initialOrderMap = new Map<string, number>(
+    INITIAL_USERS.map((u, idx) => [u.username.toLowerCase(), idx])
+  );
+
+  return [...combined].sort((a, b) => {
+    const lvlDiff = getRoleLevel(a.role) - getRoleLevel(b.role);
+    if (lvlDiff !== 0) return lvlDiff;
+    const idxA = initialOrderMap.get(a.username.toLowerCase());
+    const idxB = initialOrderMap.get(b.username.toLowerCase());
+    if (idxA !== undefined && idxB !== undefined) return idxA - idxB;
+    if (idxA !== undefined) return -1;
+    if (idxB !== undefined) return 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Users list state (auto-ensure kepala_gudang account exists even if localStorage has older data)
+  // Dynamic Role Definitions (Level Categories)
+  const [roleDefinitions, setRoleDefinitions] = useState<RoleLevelDefinition[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.ROLE_DEFINITIONS);
+      if (saved) {
+        const parsed: RoleLevelDefinition[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const normalized = parsed.map((d) => ({
+            ...d,
+            name: normalizeGudangToStoreText(d.name),
+            badgeLabel: normalizeGudangToStoreText(d.badgeLabel),
+            description: normalizeGudangToStoreText(d.description),
+          }));
+          setDynamicRoleDefinitions(normalized);
+          return normalized.sort((a, b) => a.levelNumber - b.levelNumber);
+        }
+      }
+    } catch {
+      // ignore
+    }
+    setDynamicRoleDefinitions(INITIAL_ROLE_DEFINITIONS);
+    return INITIAL_ROLE_DEFINITIONS;
+  });
+
+  useEffect(() => {
+    setDynamicRoleDefinitions(roleDefinitions);
+    try {
+      localStorage.setItem(STORAGE_KEYS.ROLE_DEFINITIONS, JSON.stringify(roleDefinitions));
+    } catch {}
+  }, [roleDefinitions]);
+
+  // Users list state (organized & sorted strictly by level)
   const [users, setUsers] = useState<UserAccount[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.USERS);
       if (saved) {
         const parsed: UserAccount[] = JSON.parse(saved);
-        const existingUsernames = new Set(parsed.map((u) => u.username.toLowerCase()));
-        const missingDefaults = INITIAL_USERS.filter(
-          (initUser) => !existingUsernames.has(initUser.username.toLowerCase())
-        );
-        if (missingDefaults.length > 0) {
-          const merged = [...parsed, ...missingDefaults];
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(merged));
-          return merged;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const finalUsers = normalizeAndSortUsersByLevel(parsed, false);
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(finalUsers));
+          return finalUsers;
         }
-        return parsed;
       }
     } catch {
       // ignore
     }
-    return INITIAL_USERS;
+    return normalizeAndSortUsersByLevel(INITIAL_USERS, true);
   });
 
-  // Current user state (null if not logged in)
+  // Public access mode (False by default so opening the link shows the Login screen for each user account)
+  const [publicAccessMode, setPublicAccessModeState] = useState<boolean>(false);
+
+  const setPublicAccessMode = useCallback((enabled: boolean) => {
+    setPublicAccessModeState(enabled);
+  }, []);
+
+  // Current user state (null if not logged in -> opens directly to LoginView so each account logs in themselves)
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
@@ -322,7 +592,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [stockItems, setStockItems] = useState<StockItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.STOCK_ITEMS);
-      if (saved) return JSON.parse(saved);
+      if (saved !== null) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch {
       // ignore
     }
@@ -333,21 +606,14 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [lpbDocuments, setLpbDocuments] = useState<LPBDocument[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.LPB_DOCS);
-      if (saved) {
-        const parsed: LPBDocument[] = JSON.parse(saved).map((doc: LPBDocument) => ({
-          ...doc,
-          status: doc.status || 'APPROVED',
-        }));
-        const existingNumbers = new Set(parsed.map((d) => d.lpbNumber));
-        const missingDefaults = INITIAL_LPB_DOCUMENTS.filter(
-          (initDoc) => !existingNumbers.has(initDoc.lpbNumber)
-        );
-        if (missingDefaults.length > 0) {
-          const merged = [...missingDefaults, ...parsed];
-          localStorage.setItem(STORAGE_KEYS.LPB_DOCS, JSON.stringify(merged));
-          return merged;
+      if (saved !== null) {
+        const raw = JSON.parse(saved);
+        if (Array.isArray(raw)) {
+          return raw.map((doc: LPBDocument) => ({
+            ...doc,
+            status: doc.status || 'APPROVED',
+          }));
         }
-        return parsed;
       }
     } catch {
       // ignore
@@ -425,7 +691,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   const [companyProfile, setCompanyProfile] = useState<CompanyProfile>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.COMPANY_PROFILE);
-      if (saved) return { ...INITIAL_COMPANY_PROFILE, ...JSON.parse(saved) };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return normalizeCompanyProfile(parsed);
+      }
     } catch {
       // ignore
     }
@@ -454,6 +723,31 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     return INITIAL_ACTIVITY_LOGS;
   });
 
+  // Stock Opname Sessions State
+  const [stockOpnameSessions, setStockOpnameSessions] = useState<StockOpnameSession[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.STOCK_OPNAME_SESSIONS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  // Location Transfer Requests State (Admin submits -> Kepala Store ACC)
+  const [locationTransferRequests, setLocationTransferRequests] = useState<LocationTransferRequest[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LOCATION_TRANSFER_REQUESTS);
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return [];
+  });
+
+  const activeStockOpname = React.useMemo(
+    () => stockOpnameSessions.find((s) => s.status === 'IN_PROGRESS') || null,
+    [stockOpnameSessions]
+  );
+
+  const isStockLockedForOpname = Boolean(activeStockOpname);
+
   const addActivityLog = useCallback(
     (entry: {
       category: ActivityLogCategory;
@@ -469,8 +763,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         action: entry.action,
         title: entry.title,
         description: entry.description,
-        actorName: currentUser ? currentUser.name : 'Administrator Gudang',
-        actorUsername: currentUser ? currentUser.username : 'admin.gudang',
+        actorName: currentUser ? currentUser.name : 'Administrator Store',
+        actorUsername: currentUser ? currentUser.username : 'admin.store',
         actorRole: currentUser ? currentUser.role : 'admin',
         referenceNumber: entry.referenceNumber,
       };
@@ -528,6 +822,18 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_KEYS.STOCK_MOVEMENTS, JSON.stringify(stockMovements));
     } catch {}
   }, [stockMovements]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.STOCK_OPNAME_SESSIONS, JSON.stringify(stockOpnameSessions));
+    } catch {}
+  }, [stockOpnameSessions]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LOCATION_TRANSFER_REQUESTS, JSON.stringify(locationTransferRequests));
+    } catch {}
+  }, [locationTransferRequests]);
 
   useEffect(() => {
     try {
@@ -636,29 +942,28 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       if (user.isActive === false) {
         return {
           success: false,
-          error: 'Akun Anda dinonaktifkan oleh Administrator. Hubungi admin gudang untuk mengaktifkan.',
+          error: 'Akun Anda dinonaktifkan oleh Administrator. Hubungi admin store untuk mengaktifkan.',
         };
       }
 
       const updatedUser: UserAccount = {
         ...user,
+        department: normalizeGudangToStoreText(user.department),
         lastLogin: new Date().toISOString(),
       };
 
       setUsers((prev) => prev.map((u) => (u.id === user.id ? updatedUser : u)));
       setCurrentUser(updatedUser);
 
+      try {
+        sessionStorage.removeItem('inv_explicit_logout');
+      } catch {}
+
       setActiveToast({
         id: Math.random().toString(),
         type: 'success',
-        title: 'Login Berhasil',
-        message: `Selamat datang, ${user.name} (${
-          user.role === 'admin'
-            ? 'Administrator Gudang'
-            : user.role === 'kepala_gudang'
-            ? 'Kepala Gudang'
-            : user.department
-        }).`,
+        title: 'Akses Pengguna Aktif',
+        message: `Selamat datang, ${user.name} (${getRoleLabel(user.role)}).`,
       });
 
       return { success: true, user: updatedUser };
@@ -666,14 +971,86 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     [users]
   );
 
+  // Instant Public Access without Gmail or Password
+  const loginAsPublicGuest = useCallback(
+    (params: { name: string; department: string; role?: UserRole }): UserAccount => {
+      const cleanName = params.name.trim() || 'Pengguna Umum';
+      const cleanDept = params.department.trim() || 'Divisi Umum & Operasional';
+      const targetRole: UserRole = params.role || 'user';
+      const cleanUsername =
+        cleanName
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '')
+          .slice(0, 16) || 'publik';
+
+      // Check if user with same name & role already exists in users list
+      const existing = users.find(
+        (u) =>
+          u.name.trim().toLowerCase() === cleanName.toLowerCase() &&
+          u.role === targetRole &&
+          u.isActive !== false
+      );
+
+      let activeUser: UserAccount;
+      if (existing) {
+        activeUser = {
+          ...existing,
+          department: cleanDept || existing.department,
+          lastLogin: new Date().toISOString(),
+        };
+        setUsers((prev) => prev.map((u) => (u.id === existing.id ? activeUser : u)));
+      } else {
+        activeUser = {
+          id: `user_pub_${Date.now()}`,
+          username: cleanUsername,
+          password: '123',
+          name: cleanName,
+          role: targetRole,
+          department: cleanDept,
+          email: '',
+          isActive: true,
+          createdAt: new Date().toISOString(),
+          lastLogin: new Date().toISOString(),
+        };
+        setUsers((prev) => [...prev, activeUser]);
+      }
+
+      try {
+        sessionStorage.removeItem('inv_explicit_logout');
+        localStorage.setItem('inv_public_guest_user', JSON.stringify(activeUser));
+        localStorage.setItem(STORAGE_KEYS.CURRENT_USER, activeUser.id);
+      } catch {}
+
+      setCurrentUser(activeUser);
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title: 'Akses Publik Tanpa Login Aktif',
+        message: `Masuk sebagai ${activeUser.name} (${
+          targetRole === 'admin'
+            ? 'Admin Gudang'
+            : targetRole === 'kepala_gudang'
+            ? 'Kepala Gudang'
+            : cleanDept
+        }) tanpa perlu akun Gmail.`,
+      });
+
+      return activeUser;
+    },
+    [users]
+  );
+
   const logout = useCallback(() => {
+    try {
+      sessionStorage.setItem('inv_explicit_logout', 'true');
+    } catch {}
     setCurrentUser(null);
     localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
     setActiveToast({
       id: Math.random().toString(),
       type: 'info',
-      title: 'Logout Berhasil',
-      message: 'Anda telah keluar dari sistem inventaris gudang.',
+      title: 'Beralih ke Layar Pilih Peran / Akses',
+      message: 'Anda dapat langsung masuk kembali tanpa akun Gmail dengan memilih peran atau mengetik nama.',
     });
   }, []);
 
@@ -685,7 +1062,15 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       role: UserRole;
       department: string;
       email?: string;
+      permissions?: Partial<UserPermissions>;
     }) => {
+      if (currentUser && !canManageTargetRole(currentUser.role, userData.role)) {
+        return {
+          success: false,
+          error: `Peran Anda (${getRoleLabel(currentUser.role)}) hanya dapat menambahkan user untuk level di bawahnya.`,
+        };
+      }
+
       const trimmedUsername = userData.username.trim().toLowerCase();
       if (!trimmedUsername || !userData.password || !userData.name) {
         return { success: false, error: 'Username, password, dan nama lengkap wajib diisi.' };
@@ -702,9 +1087,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         name: userData.name.trim(),
         role: userData.role,
         department: userData.department.trim(),
-        email: userData.email ? userData.email.trim() : `${trimmedUsername}@pabrik.co.id`,
+        email: userData.email ? userData.email.trim() : '',
         isActive: true,
         createdAt: new Date().toISOString(),
+        permissions: userData.permissions,
       };
 
       setUsers((prev) => [...prev, newUser]);
@@ -713,7 +1099,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         category: 'USER_CHANGE',
         action: 'USER_CREATED',
         title: 'Penambahan Akun Pengguna Baru',
-        description: `Akun pengguna baru "${newUser.name}" (@${newUser.username}) dengan role ${newUser.role.toUpperCase()} (${newUser.department}) ditambahkan.`,
+        description: `Akun pengguna baru "${newUser.name}" (@${newUser.username}) dengan level ${getRoleLabel(newUser.role)} (${newUser.department}) ditambahkan.`,
         referenceNumber: `@${newUser.username}`,
       });
 
@@ -721,12 +1107,12 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         id: Math.random().toString(),
         type: 'success',
         title: 'Akun Pengguna Baru Dibuat',
-        message: `Akun "${newUser.username}" (${newUser.name}) berhasil ditambahkan oleh Admin.`,
+        message: `Akun "${newUser.username}" (${newUser.name} - ${getRoleLabel(newUser.role)}) berhasil ditambahkan.`,
       });
 
       return { success: true, user: newUser };
     },
-    [users, addActivityLog]
+    [currentUser, users, addActivityLog]
   );
 
   const updateUser = useCallback(
@@ -734,14 +1120,33 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       const targetUser = users.find((u) => u.id === userId);
       if (!targetUser) return { success: false, error: 'Pengguna tidak ditemukan.' };
 
-      if (updates.username) {
+      const isSelf = currentUser?.id === userId;
+      if (currentUser && !isSelf && !canManageTargetRole(currentUser.role, targetUser.role)) {
+        return {
+          success: false,
+          error: `Anda tidak memiliki otorisasi untuk mengubah data akun ${getRoleLabel(targetUser.role)} (hanya dapat mengedit level di bawah Anda).`,
+        };
+      }
+
+      if (currentUser && updates.role && updates.role !== targetUser.role && !canManageTargetRole(currentUser.role, updates.role)) {
+        return {
+          success: false,
+          error: `Anda hanya dapat menetapkan level jabatan di bawah ${getRoleLabel(currentUser.role)}.`,
+        };
+      }
+
+      if (updates.username !== undefined) {
         const trimmed = updates.username.trim().toLowerCase();
+        if (!trimmed) {
+          return { success: false, error: 'Username tidak boleh kosong.' };
+        }
         if (users.some((u) => u.id !== userId && u.username.toLowerCase() === trimmed)) {
           return { success: false, error: `Username "${updates.username}" sudah dipakai akun lain.` };
         }
+        updates.username = updates.username.trim();
       }
 
-      const updated = { ...targetUser, ...updates };
+      const updated: UserAccount = { ...targetUser, ...updates };
       setUsers((prev) => prev.map((u) => (u.id === userId ? updated : u)));
 
       if (currentUser && currentUser.id === userId) {
@@ -751,16 +1156,16 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'USER_CHANGE',
         action: 'USER_UPDATED',
-        title: 'Perubahan Profil Akun Pengguna',
-        description: `Data akun @${updated.username} (${updated.name} - ${updated.department}) diperbarui oleh Admin.`,
+        title: 'Perubahan Profil, Username & Hak Akses Pengguna',
+        description: `Data akun @${updated.username} (${updated.name} - ${getRoleLabel(updated.role)}) diperbarui oleh ${currentUser?.name || 'Admin'}.`,
         referenceNumber: `@${updated.username}`,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'info',
-        title: 'Data Pengguna Diperbarui',
-        message: `Perubahan akun ${updated.username} berhasil disimpan.`,
+        title: 'Data & Hak Akses Pengguna Diperbarui',
+        message: `Perubahan akun @${updated.username} (${updated.name}) berhasil disimpan.`,
       });
 
       return { success: true };
@@ -769,7 +1174,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   );
 
   const resetUserPassword = useCallback(
-    (userId: string, newPassword: string) => {
+    (userId: string, newPassword: string, newUsername?: string) => {
       if (!newPassword || newPassword.length < 4) {
         return { success: false, error: 'Password baru minimal 4 karakter.' };
       }
@@ -777,28 +1182,52 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       const targetUser = users.find((u) => u.id === userId);
       if (!targetUser) return { success: false, error: 'Pengguna tidak ditemukan.' };
 
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, password: newPassword } : u))
-      );
+      const isSelf = currentUser?.id === userId;
+      if (currentUser && !isSelf && !canManageTargetRole(currentUser.role, targetUser.role)) {
+        return {
+          success: false,
+          error: `Anda hanya dapat mereset password/username untuk user dengan level di bawah ${getRoleLabel(currentUser.role)}.`,
+        };
+      }
+
+      let finalUsername = targetUser.username;
+      if (newUsername && newUsername.trim() && newUsername.trim() !== targetUser.username) {
+        const cleanU = newUsername.trim().toLowerCase();
+        if (users.some((u) => u.id !== userId && u.username.toLowerCase() === cleanU)) {
+          return { success: false, error: `Username "${newUsername}" sudah digunakan akun lain.` };
+        }
+        finalUsername = newUsername.trim();
+      }
+
+      const updatedUser: UserAccount = {
+        ...targetUser,
+        username: finalUsername,
+        password: newPassword,
+      };
+
+      setUsers((prev) => prev.map((u) => (u.id === userId ? updatedUser : u)));
+      if (currentUser && currentUser.id === userId) {
+        setCurrentUser(updatedUser);
+      }
 
       addActivityLog({
         category: 'USER_CHANGE',
         action: 'PASSWORD_RESET',
-        title: 'Reset Password Akun Pengguna',
-        description: `Password untuk akun @${targetUser.username} (${targetUser.name}) telah direset oleh Admin.`,
-        referenceNumber: `@${targetUser.username}`,
+        title: 'Reset Password / Edit Username Pengguna',
+        description: `Kredensial untuk akun @${finalUsername} (${targetUser.name} - ${getRoleLabel(targetUser.role)}) telah diperbarui oleh ${currentUser?.name || 'Admin'}.`,
+        referenceNumber: `@${finalUsername}`,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'success',
-        title: 'Password Berhasil Diubah',
-        message: `Password akun ${targetUser.username} telah diperbarui oleh Admin.`,
+        title: 'Kredensial Berhasil Diperbarui',
+        message: `Username (@${finalUsername}) & password akun ${targetUser.name} berhasil disimpan.`,
       });
 
       return { success: true };
     },
-    [users, addActivityLog]
+    [currentUser, users, addActivityLog]
   );
 
   const deleteUser = useCallback(
@@ -810,13 +1239,20 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       const target = users.find((u) => u.id === userId);
       if (!target) return { success: false, error: 'Pengguna tidak ditemukan.' };
 
+      if (currentUser && !canManageTargetRole(currentUser.role, target.role)) {
+        return {
+          success: false,
+          error: `Anda hanya dapat menghapus akun dengan level di bawah ${getRoleLabel(currentUser.role)}.`,
+        };
+      }
+
       setUsers((prev) => prev.filter((u) => u.id !== userId));
 
       addActivityLog({
         category: 'USER_CHANGE',
         action: 'USER_DELETED',
         title: 'Penghapusan Akun Pengguna',
-        description: `Akun pengguna @${target.username} (${target.name} - ${target.department}) dihapus dari sistem.`,
+        description: `Akun pengguna @${target.username} (${target.name} - ${getRoleLabel(target.role)}) dihapus dari sistem oleh ${currentUser?.name || 'Admin'}.`,
         referenceNumber: `@${target.username}`,
       });
 
@@ -841,6 +1277,13 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       const target = users.find((u) => u.id === userId);
       if (!target) return { success: false, error: 'Pengguna tidak ditemukan.' };
 
+      if (currentUser && !canManageTargetRole(currentUser.role, target.role)) {
+        return {
+          success: false,
+          error: `Anda hanya dapat mengunci/mengaktifkan akun dengan level di bawah ${getRoleLabel(currentUser.role)}.`,
+        };
+      }
+
       const newStatus = !target.isActive;
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, isActive: newStatus } : u))
@@ -849,21 +1292,221 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'USER_CHANGE',
         action: newStatus ? 'USER_ACTIVATED' : 'USER_DEACTIVATED',
-        title: newStatus ? 'Pengaktifan Akun Pengguna' : 'Penonaktifan Akun Pengguna',
-        description: `Status akses login akun @${target.username} (${target.name}) diubah menjadi ${newStatus ? 'AKTIF' : 'NONAKTIF'}.`,
+        title: newStatus ? 'Pengaktifan (Unlock) Akun Pengguna' : 'Kunci Audit / Penonaktifan (Lock) Akun Pengguna',
+        description: `Status akses login akun @${target.username} (${target.name} - ${getRoleLabel(target.role)}) diubah menjadi ${newStatus ? 'AKTIF (UNLOCKED)' : 'DIKUNCI / NONAKTIF (LOCKED)'} oleh ${currentUser?.name || 'Admin'}.`,
         referenceNumber: `@${target.username}`,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'info',
-        title: newStatus ? 'Akun Diaktifkan' : 'Akun Dinonaktifkan',
-        message: `Status akun ${target.username} diubah menjadi ${newStatus ? 'Aktif' : 'Nonaktif'}.`,
+        title: newStatus ? 'Akun Diaktifkan (Unlocked)' : 'Akun Dikunci (Locked)',
+        message: `Status akun @${target.username} diubah menjadi ${newStatus ? 'Aktif' : 'Terkunci / Nonaktif'}.`,
       });
 
       return { success: true };
     },
     [currentUser, users, addActivityLog]
+  );
+
+  const reorganizeUsersByLevel = useCallback(
+    (resetPermissionsToDefault = true) => {
+      const nextUsers = normalizeAndSortUsersByLevel(users, resetPermissionsToDefault);
+      setUsers(nextUsers);
+      if (currentUser) {
+        const updatedSelf = nextUsers.find((u) => u.id === currentUser.id);
+        if (updatedSelf) setCurrentUser(updatedSelf);
+      }
+
+      addActivityLog({
+        category: 'USER_CHANGE',
+        action: 'USERS_REORGANIZED_BY_LEVEL',
+        title: 'Penataan Ulang Database User Sesuai Hierarki Level',
+        description: `Database akun pengguna (${nextUsers.length} user) telah diatur ulang, diurutkan, dan disesuaikan hak aksesnya berdasarkan urutan level oleh ${currentUser?.name || 'Administrator'}.`,
+        referenceNumber: 'DB-USERS-LVL',
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title: 'Database User Diatur Ulang Sesuai Level',
+        message: `Seluruh ${nextUsers.length} akun pengguna telah diurutkan dan disesuaikan hak aksesnya sesuai struktur level masing-masing.`,
+      });
+    },
+    [users, currentUser, addActivityLog]
+  );
+
+  // Dynamic Role / Level Category Management (Superuser Level 0)
+  const addRoleDefinition = useCallback(
+    (def: RoleLevelDefinition) => {
+      if (currentUser && currentUser.role !== 'superuser') {
+        return {
+          success: false,
+          error: 'Hanya Super User (Level 0) yang dapat menambahkan kategori level baru.',
+        };
+      }
+      const cleanKey = def.roleKey
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_');
+      if (!cleanKey) {
+        return { success: false, error: 'Kode ID kategori level wajib diisi.' };
+      }
+      if (roleDefinitions.some((r) => r.roleKey.toLowerCase() === cleanKey)) {
+        return {
+          success: false,
+          error: `Kategori level dengan kode "${cleanKey}" sudah ada.`,
+        };
+      }
+      if (!def.name.trim()) {
+        return { success: false, error: 'Nama kategori level / jabatan wajib diisi.' };
+      }
+      const newDef: RoleLevelDefinition = {
+        roleKey: cleanKey,
+        levelNumber: Math.max(1, Number(def.levelNumber) || 1),
+        name: normalizeGudangToStoreText(def.name.trim()),
+        badgeLabel:
+          normalizeGudangToStoreText(def.badgeLabel.trim()) ||
+          `LVL ${Math.max(1, Number(def.levelNumber) || 1)} • ${def.name.trim().toUpperCase()}`,
+        description: normalizeGudangToStoreText(def.description.trim()),
+        colorTheme: def.colorTheme || 'blue',
+        isSystemDefault: false,
+        defaultPermissions: { ...def.defaultPermissions },
+      };
+
+      const nextList = [...roleDefinitions, newDef].sort(
+        (a, b) => a.levelNumber - b.levelNumber
+      );
+      setDynamicRoleDefinitions(nextList);
+      setRoleDefinitions(nextList);
+
+      addActivityLog({
+        category: 'USER_CHANGE',
+        action: 'ROLE_LEVEL_ADDED',
+        title: 'Penambahan Kategori Level Jabatan Baru',
+        description: `Super User menambahkan kategori level baru: Level ${newDef.levelNumber} — ${newDef.name} (kode: ${newDef.roleKey}).`,
+        referenceNumber: `LVL-${newDef.levelNumber}`,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title: 'Kategori Level Baru Ditambahkan',
+        message: `Level ${newDef.levelNumber} — ${newDef.name} berhasil ditambahkan ke sistem.`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, roleDefinitions, addActivityLog]
+  );
+
+  const updateRoleDefinition = useCallback(
+    (roleKey: string, updates: Partial<RoleLevelDefinition>) => {
+      if (currentUser && currentUser.role !== 'superuser') {
+        return {
+          success: false,
+          error: 'Hanya Super User (Level 0) yang dapat mengubah kategori level.',
+        };
+      }
+      const target = roleDefinitions.find((r) => r.roleKey === roleKey);
+      if (!target) {
+        return { success: false, error: 'Kategori level tidak ditemukan.' };
+      }
+      const updatedDef: RoleLevelDefinition = {
+        ...target,
+        ...updates,
+        roleKey: target.roleKey,
+        levelNumber:
+          target.roleKey === 'superuser'
+            ? 0
+            : updates.levelNumber !== undefined
+            ? Math.max(1, Number(updates.levelNumber))
+            : target.levelNumber,
+        name: normalizeGudangToStoreText((updates.name ?? target.name).trim()),
+        badgeLabel: normalizeGudangToStoreText(
+          (updates.badgeLabel ?? target.badgeLabel).trim()
+        ),
+        description: normalizeGudangToStoreText(
+          (updates.description ?? target.description).trim()
+        ),
+        defaultPermissions: updates.defaultPermissions
+          ? { ...target.defaultPermissions, ...updates.defaultPermissions }
+          : target.defaultPermissions,
+      };
+
+      const nextList = roleDefinitions
+        .map((r) => (r.roleKey === roleKey ? updatedDef : r))
+        .sort((a, b) => a.levelNumber - b.levelNumber);
+      setDynamicRoleDefinitions(nextList);
+      setRoleDefinitions(nextList);
+
+      addActivityLog({
+        category: 'USER_CHANGE',
+        action: 'ROLE_LEVEL_UPDATED',
+        title: 'Pembaruan Kategori Level Jabatan',
+        description: `Kategori Level ${updatedDef.levelNumber} — ${updatedDef.name} diperbarui oleh Super User.`,
+        referenceNumber: `LVL-${updatedDef.levelNumber}`,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'info',
+        title: 'Kategori Level Diperbarui',
+        message: `Level ${updatedDef.levelNumber} — ${updatedDef.name} berhasil disimpan.`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, roleDefinitions, addActivityLog]
+  );
+
+  const deleteRoleDefinition = useCallback(
+    (roleKey: string) => {
+      if (currentUser && currentUser.role !== 'superuser') {
+        return {
+          success: false,
+          error: 'Hanya Super User (Level 0) yang dapat menghapus kategori level.',
+        };
+      }
+      const target = roleDefinitions.find((r) => r.roleKey === roleKey);
+      if (!target) {
+        return { success: false, error: 'Kategori level tidak ditemukan.' };
+      }
+      if (target.isSystemDefault) {
+        return {
+          success: false,
+          error: 'Kategori level bawaan sistem utama tidak dapat dihapus (namun dapat diedit).',
+        };
+      }
+      if (users.some((u) => u.role === roleKey)) {
+        return {
+          success: false,
+          error: `Masih ada pengguna aktif dengan kategori "${target.name}". Ubah level pengguna tersebut terlebih dahulu sebelum menghapus kategori ini.`,
+        };
+      }
+
+      const nextList = roleDefinitions.filter((r) => r.roleKey !== roleKey);
+      setDynamicRoleDefinitions(nextList);
+      setRoleDefinitions(nextList);
+
+      addActivityLog({
+        category: 'USER_CHANGE',
+        action: 'ROLE_LEVEL_DELETED',
+        title: 'Penghapusan Kategori Level Jabatan',
+        description: `Kategori Level ${target.levelNumber} — ${target.name} dihapus oleh Super User.`,
+        referenceNumber: `LVL-${target.levelNumber}`,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'info',
+        title: 'Kategori Level Dihapus',
+        message: `Kategori "${target.name}" telah dihapus dari sistem.`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, roleDefinitions, users, addActivityLog]
   );
 
   const dismissToast = () => {
@@ -1345,6 +1988,20 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       }>,
       mode: 'upsert' | 'add_only' = 'upsert'
     ) => {
+      if (isStockLockedForOpname) {
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'error',
+          title: 'Stok Store Ter-Lock (Stock Opname Aktif)',
+          message: `Tidak dapat import stok selama sesi Stock Opname #${activeStockOpname?.opnameNumber} sedang berlangsung.`,
+        });
+        return {
+          success: false,
+          added: 0,
+          updated: 0,
+          error: `Stok Store sedang TER-LOCK karena proses Stock Opname (#${activeStockOpname?.opnameNumber}) sedang berlangsung!`,
+        };
+      }
       if (!newItemsList || newItemsList.length === 0) {
         return { success: false, added: 0, updated: 0, error: 'Tidak ada data barang yang valid untuk diimpor.' };
       }
@@ -1495,46 +2152,48 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         poNumber: data.poNumber || '-',
         driverName: data.driverName || '-',
         vehiclePlate: data.vehiclePlate || '-',
-        usagePurpose: data.usagePurpose || 'Pemenuhan Stok Logistik Gudang',
+        usagePurpose: data.usagePurpose || 'Pemenuhan Stok Logistik Store',
         storageLocation: data.storageLocation || (resolvedItems[0]?.storageLocation || 'Rak A-01'),
         notes: data.notes || '',
-        status: 'PENDING_APPROVAL', // Menunggu Approve Penambahan Stock oleh Kepala Gudang
+        status: 'PENDING_APPROVAL', // Menunggu Approve Penambahan Stock oleh Kepala Store
         receivedByAdmin: adminName,
+        receivedByAdminId: currentUser?.id,
+        receivedByAdminUsername: currentUser?.username,
         adminValidatedAt: nowIso,
-        verifiedBy: 'Menunggu Approve Kepala Gudang',
+        verifiedBy: 'Menunggu Approve Kepala Store',
         items: resolvedItems,
         createdAt: nowIso,
       };
 
-      // Kirim notifikasi ke Kepala Gudang untuk Approve Penambahan Stock
+      // Kirim notifikasi ke Kepala Store untuk Approve Penambahan Stock
       const newNotif: AppNotification = {
         id: `notif_${Date.now()}`,
         targetRole: 'kepala_gudang',
         type: 'lpb_created',
-        title: 'LPB Baru Divalidasi Admin — Menunggu Approve Penambahan Stock (Kepala Gudang)',
-        message: `Admin Gudang (${adminName}) telah meng-ACC & memvalidasi scan barang LPB #${lpbNumber} (SJ: ${data.sjNumber} - ${data.supplierName}). Stok fisik belum bertambah — menunggu Approve Penambahan Stock oleh Kepala Gudang.`,
+        title: 'LPB Baru Divalidasi Admin — Menunggu Approve Penambahan Stock (Kepala Store)',
+        message: `Admin Store (${adminName}) telah meng-ACC & memvalidasi scan barang LPB #${lpbNumber} (SJ: ${data.sjNumber} - ${data.supplierName}). Stok fisik belum bertambah — menunggu Approve Penambahan Stock oleh Kepala Store.`,
         lpbId: newLPB.id,
         read: false,
         timestamp: nowIso,
       };
 
-      // PENTING: Stok fisik (currentStock) BELUM ditambah pada tahap Admin Gudang!
+      // PENTING: Stok fisik (currentStock) BELUM ditambah pada tahap Admin Store!
       setLpbDocuments((prev) => [newLPB, ...prev]);
       setNotifications((prev) => [newNotif, ...prev]);
 
       addActivityLog({
         category: 'APPROVAL_WORKFLOW',
         action: 'LPB_VALIDATED_ADMIN',
-        title: 'ACC & Validasi/Scan Barang Masuk LPB oleh Admin Gudang (Stok Belum Bertambah)',
-        description: `Admin Gudang (${adminName}) menginput & memvalidasi scan barcode LPB #${lpbNumber} dari SJ ${data.sjNumber} (${data.supplierName}): ${resolvedItems.map((i) => `${i.itemName} (${i.quantity} ${i.unit})`).join(', ')}. Stok fisik belum berubah — menunggu Approve Penambahan Stock oleh Kepala Gudang.`,
+        title: 'ACC & Validasi/Scan Barang Masuk LPB oleh Admin Store (Stok Belum Bertambah)',
+        description: `Admin Store (${adminName}) menginput & memvalidasi scan barcode LPB #${lpbNumber} dari SJ ${data.sjNumber} (${data.supplierName}): ${resolvedItems.map((i) => `${i.itemName} (${i.quantity} ${i.unit})`).join(', ')}. Stok fisik belum berubah — menunggu Approve Penambahan Stock oleh Kepala Store.`,
         referenceNumber: lpbNumber,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'info',
-        title: 'LPB Di-ACC & Divalidasi Admin (Stok Belum Bertambah)',
-        message: `LPB #${lpbNumber} berhasil divalidasi Admin Gudang. Menunggu Approve Penambahan Stock oleh User Kepala Gudang agar stok fisik bertambah.`,
+        title: 'LPB Di-ACC & Divalidasi Admin Store (Stok Belum Bertambah)',
+        message: `LPB #${lpbNumber} berhasil divalidasi Admin Store. Menunggu Approve Penambahan Stock oleh Kepala Store agar stok fisik bertambah.`,
       });
 
       return newLPB;
@@ -1542,8 +2201,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     [currentUser, lpbDocuments.length, stockItems, addActivityLog]
   );
 
-  // 1B. Approve Penambahan Stock LPB (HANYA oleh User Kepala Gudang)
-  // - Mengubah status LPB menjadi 'APPROVED' dan OTOMATIS MENAMBAH stok fisik gudang (currentStock) + mencatat Kartu Stok IN!
+  // 1B. Approve Penambahan Stock LPB (Oleh Kepala Store / Super User)
   const approveLPBStockAddition = useCallback(
     (
       lpbId: string,
@@ -1552,11 +2210,24 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         notes?: string;
       }
     ) => {
-      if (currentUser?.role !== 'kepala_gudang') {
+      if (isStockLockedForOpname) {
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'error',
+          title: 'Stok Store Ter-Lock (Stock Opname Aktif)',
+          message: `Tidak dapat menambah stok LPB selama sesi Stock Opname #${activeStockOpname?.opnameNumber} sedang berlangsung.`,
+        });
+        return {
+          success: false,
+          error: `Stok Store sedang TER-LOCK karena proses Stock Opname (#${activeStockOpname?.opnameNumber}) sedang berlangsung! Selesaikan Stock Opname terlebih dahulu.`,
+        };
+      }
+
+      if (!getEffectivePermissions(currentUser).canApproveLPBStockAddition) {
         return {
           success: false,
           error:
-            'User Admin hanya berwenang melakukan ACC & validasi barang/scan. Approve penambahan stock hanya dapat dilakukan oleh User Kepala Gudang!',
+            'Akun Anda tidak memiliki hak akses untuk meng-approve penambahan stock LPB (membutuhkan akses Level 0 Super User atau Level 1 Kepala Store).',
         };
       }
 
@@ -1568,23 +2239,25 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       if (targetLPB.status === 'APPROVED') {
         return {
           success: false,
-          error: 'Penambahan stock untuk LPB ini sudah di-approve oleh Kepala Gudang sebelumnya.',
+          error: 'Penambahan stock untuk LPB ini sudah di-approve oleh Kepala Store sebelumnya.',
         };
       }
 
       const now = new Date();
       const nowIso = now.toISOString();
-      const headName = payload?.warehouseHeadName?.trim() || currentUser.name || 'Suryadi';
+      const headName = payload?.warehouseHeadName?.trim() || currentUser?.name || 'Suryadi';
 
       const updatedLPB: LPBDocument = {
         ...targetLPB,
         status: 'APPROVED',
-        verifiedBy: `${headName} (Kepala Gudang)`,
+        verifiedBy: `${headName} (Kepala Store)`,
         approvedByWarehouseHead: headName,
+        approvedByWarehouseHeadId: currentUser?.id,
+        approvedByWarehouseHeadUsername: currentUser?.username,
         approvedAt: nowIso,
-        headApprovalNotes: payload?.notes?.trim() || 'Penambahan stock di-approve oleh Kepala Gudang.',
+        headApprovalNotes: payload?.notes?.trim() || 'Penambahan stock di-approve oleh Kepala Store.',
         notes: payload?.notes?.trim()
-          ? `${targetLPB.notes ? targetLPB.notes + ' | ' : ''}Approve Kepala Gudang: ${payload.notes.trim()}`
+          ? `${targetLPB.notes ? targetLPB.notes + ' | ' : ''}Approve Kepala Store: ${payload.notes.trim()}`
           : targetLPB.notes,
       };
 
@@ -1611,10 +2284,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
             balanceBefore,
             balanceAfter,
             date: nowIso,
-            actor: `${headName} (Approve Kepala Gudang) & ${targetLPB.receivedByAdmin} (Validasi Admin)`,
+            actor: `${headName} (Approve Kepala Store) & ${targetLPB.receivedByAdmin} (Validasi Admin Store)`,
             notes:
               incoming.notes ||
-              `Approve Penambahan Stock Kepala Gudang (${headName}) atas SJ ${targetLPB.supplierName}`,
+              `Approve Penambahan Stock Kepala Store (${headName}) atas SJ ${targetLPB.supplierName}`,
           });
 
           return {
@@ -1631,8 +2304,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         id: `notif_${Date.now()}`,
         targetRole: 'all',
         type: 'lpb_created',
-        title: 'Kepala Gudang Meng-Approve Penambahan Stock (LPB)',
-        message: `Kepala Gudang (${headName}) telah meng-approve penambahan stock LPB #${targetLPB.lpbNumber} (SJ: ${targetLPB.sjNumber}). Total ${targetLPB.items.reduce((acc, i) => acc + i.quantity, 0)} unit resmi ditambahkan ke stok fisik gudang.`,
+        title: 'Kepala Store Meng-Approve Penambahan Stock (LPB)',
+        message: `Kepala Store (${headName}) telah meng-approve penambahan stock LPB #${targetLPB.lpbNumber} (SJ: ${targetLPB.sjNumber}). Total ${targetLPB.items.reduce((acc, i) => acc + i.quantity, 0)} unit resmi ditambahkan ke stok fisik store.`,
         lpbId: targetLPB.id,
         read: false,
         timestamp: nowIso,
@@ -1646,8 +2319,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'STOCK_ADJUSTMENT',
         action: 'LPB_CREATED',
-        title: 'Approve Penambahan Stock LPB oleh Kepala Gudang (Stok Fisik Bertambah)',
-        description: `Kepala Gudang (${headName}) meng-approve penambahan stock LPB #${targetLPB.lpbNumber} dari hasil validasi Admin Gudang (${targetLPB.receivedByAdmin}). Penambahan stok fisik: ${targetLPB.items.map((i) => `${i.itemName} +${i.quantity} ${i.unit}`).join(', ')}.`,
+        title: 'Approve Penambahan Stock LPB oleh Kepala Store (Stok Fisik Bertambah)',
+        description: `Kepala Store (${headName}) meng-approve penambahan stock LPB #${targetLPB.lpbNumber} dari hasil validasi Admin Store (${targetLPB.receivedByAdmin}). Penambahan stok fisik: ${targetLPB.items.map((i) => `${i.itemName} +${i.quantity} ${i.unit}`).join(', ')}.`,
         referenceNumber: targetLPB.lpbNumber,
       });
 
@@ -1656,8 +2329,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       setActiveToast({
         id: Math.random().toString(),
         type: 'success',
-        title: 'Penambahan Stock Di-Approve Kepala Gudang',
-        message: `LPB #${targetLPB.lpbNumber} telah di-approve oleh Kepala Gudang (${headName}). Stok fisik gudang otomatis bertambah!`,
+        title: 'Penambahan Stock Di-Approve Kepala Store',
+        message: `LPB #${targetLPB.lpbNumber} telah di-approve oleh Kepala Store (${headName}). Stok fisik store otomatis bertambah!`,
       });
 
       return { success: true };
@@ -1665,13 +2338,13 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     [currentUser, lpbDocuments, stockItems, addActivityLog]
   );
 
-  // 1C. Reject LPB (Oleh User Kepala Gudang)
+  // 1C. Reject LPB (Oleh Kepala Store)
   const rejectLPB = useCallback(
     (lpbId: string, reason: string) => {
-      if (currentUser?.role !== 'kepala_gudang') {
+      if (!getEffectivePermissions(currentUser).canApproveLPBStockAddition && !getEffectivePermissions(currentUser).canCreateLPB) {
         return {
           success: false,
-          error: 'Hanya User Kepala Gudang yang berwenang menolak dokumen LPB.',
+          error: 'Anda tidak memiliki hak akses untuk menolak dokumen LPB.',
         };
       }
       const targetLPB = lpbDocuments.find((d) => d.id === lpbId);
@@ -1686,8 +2359,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
             ? {
                 ...d,
                 status: 'REJECTED',
-                rejectionReason: reason.trim() || 'Ditolak oleh Kepala Gudang',
-                verifiedBy: `Ditolak oleh ${currentUser.name}`,
+                rejectionReason: reason.trim() || 'Ditolak oleh Kepala Store',
+                verifiedBy: `Ditolak oleh ${currentUser?.name || 'Kepala Store'}`,
               }
             : d
         )
@@ -1696,15 +2369,15 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'APPROVAL_WORKFLOW',
         action: 'LPB_REJECTED',
-        title: 'Penolakan Penambahan Stock LPB oleh Kepala Gudang',
-        description: `Kepala Gudang (${currentUser.name}) menolak penambahan stock LPB #${targetLPB.lpbNumber}. Alasan: ${reason}`,
+        title: 'Penolakan Penambahan Stock LPB oleh Kepala Store',
+        description: `Kepala Store (${currentUser?.name || 'Kepala Store'}) menolak penambahan stock LPB #${targetLPB.lpbNumber}. Alasan: ${reason}`,
         referenceNumber: targetLPB.lpbNumber,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'warning',
-        title: 'LPB Ditolak Kepala Gudang',
+        title: 'LPB Ditolak Kepala Store',
         message: `Penambahan stock untuk LPB #${targetLPB.lpbNumber} ditolak (stok fisik tidak berubah).`,
       });
 
@@ -1722,6 +2395,19 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       department?: string;
       items: { itemId: string; requestedQty: number; costCenter?: string; glAcc?: string }[];
     }) => {
+      if (isStockLockedForOpname) {
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'error',
+          title: 'Stok Store Ter-Lock (Stock Opname Aktif)',
+          message: `Tidak dapat menerbitkan SIV baru selama sesi Stock Opname #${activeStockOpname?.opnameNumber} sedang berlangsung.`,
+        });
+        return {
+          success: false,
+          error: `Stok Store sedang TER-LOCK karena proses Stock Opname (#${activeStockOpname?.opnameNumber}) sedang berlangsung! Tidak dapat menambah atau mengurangi stok sampai proses Stock Opname selesai.`,
+        };
+      }
+
       // Validate items & stock availability
       if (!data.items || data.items.length === 0) {
         return { success: false, error: 'Pilih minimal satu item barang untuk diambil.' };
@@ -1767,6 +2453,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         id: `voucher_${Date.now()}`,
         voucherNumber,
         requestedBy: currentUser ? currentUser.name : 'User',
+        requesterUsername: currentUser?.username,
         approvedByRequester: currentUser ? currentUser.name : 'User',
         userId: currentUser ? currentUser.id : 'unknown',
         department: data.department || (currentUser ? currentUser.department : 'General'),
@@ -1851,30 +2538,43 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         }[];
       }
     ) => {
+      if (isStockLockedForOpname) {
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'error',
+          title: 'Stok Store Ter-Lock (Stock Opname Aktif)',
+          message: `Tidak dapat memvalidasi pengeluaran SIV selama sesi Stock Opname #${activeStockOpname?.opnameNumber} sedang berlangsung.`,
+        });
+        return {
+          success: false,
+          error: `Stok Store sedang TER-LOCK karena proses Stock Opname (#${activeStockOpname?.opnameNumber}) sedang berlangsung!`,
+        };
+      }
+
       const voucher = issueVouchers.find((v) => v.id === voucherId);
       if (!voucher) {
         return { success: false, error: 'Nota pengambilan barang tidak ditemukan.' };
       }
 
-      if (currentUser?.role !== 'admin') {
+      if (!getEffectivePermissions(currentUser).canValidateSIV) {
         return {
           success: false,
           error:
-            'Hanya User Admin Gudang yang berwenang melakukan ACC SIV & validasi barang/scan barcode.',
+            'Akun Anda tidak memiliki hak akses untuk melakukan ACC SIV & validasi barang (membutuhkan akses Level 0, Level 1, atau Level 2).',
         };
       }
 
       if (voucher.status !== 'PENDING') {
         return {
           success: false,
-          error: 'SIV ini sudah diverifikasi oleh Admin Gudang sebelumnya.',
+          error: 'SIV ini sudah diverifikasi oleh Admin Store sebelumnya.',
         };
       }
 
       if (!payload.recipientName.trim()) {
         return {
           success: false,
-          error: 'Nama penerima barang wajib diinputkan oleh Admin Gudang.',
+          error: 'Nama penerima barang wajib diinputkan oleh Admin Store.',
         };
       }
 
@@ -1897,15 +2597,15 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
             issuedQty: item.requestedQty,
             isCancelled: false,
             barcodeValidated: true,
-            barcodeScanned: true,
             barcodeScannedAt: nowIso,
           };
         }
         const finalQty = val.isCancelled ? 0 : Math.max(0, Number(val.issuedQty || 0));
-        const isScanned =
+        const isScanned: boolean = Boolean(
           ('barcodeValidated' in val && val.barcodeValidated) ||
           ('barcodeScanned' in val && val.barcodeScanned) ||
-          true;
+          true
+        );
 
         return {
           ...item,
@@ -1913,23 +2613,26 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           issuedQty: finalQty,
           isCancelled: val.isCancelled || finalQty === 0,
           barcodeValidated: isScanned,
-          barcodeScanned: isScanned,
           barcodeScannedAt:
-            ('barcodeScannedAt' in val && val.barcodeScannedAt) || nowIso,
+            ('barcodeScannedAt' in val && typeof val.barcodeScannedAt === 'string')
+              ? val.barcodeScannedAt
+              : nowIso,
         };
       });
 
       const updatedVoucher: IssueVoucherDocument = {
         ...voucher,
-        status: 'APPROVED', // SIV Terkunci (Admin Gudang sudah ACC & validasi barang/qty, stok fisik BELUM berubah, menunggu verifikasi Kepala Gudang)
+        status: 'APPROVED', // SIV Terkunci (Admin Store sudah ACC & validasi barang/qty, stok fisik BELUM berubah, menunggu verifikasi Kepala Store)
         approvedByRequester: voucher.approvedByRequester || voucher.requestedBy,
         approvedByAdmin: adminOfficer,
+        approvedByAdminId: currentUser?.id,
+        approvedByAdminUsername: currentUser?.username,
         handoverOfficer: adminOfficer,
         handoverAt: nowIso,
         recipientName: payload.recipientName.trim(),
         items: updatedItems,
         notes: payload.notes
-          ? `${voucher.notes ? voucher.notes + ' | ' : ''}Validasi Admin Gudang: ${payload.notes}`
+          ? `${voucher.notes ? voucher.notes + ' | ' : ''}Validasi Admin Store: ${payload.notes}`
           : voucher.notes,
         updatedAt: nowIso,
       };
@@ -1948,8 +2651,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         id: `notif_${Date.now()}`,
         targetRole: 'all',
         type: 'voucher_approved',
-        title: 'SIV Di-ACC & Divalidasi Admin Gudang (Menunggu Verifikasi Kepala Gudang)',
-        message: `Nota #${voucher.voucherNumber} telah di-ACC & divalidasi oleh Admin Gudang (${adminOfficer}) untuk penerima ${payload.recipientName.trim()}. SIV kini terkunci (stok belum berubah), menunggu verifikasi pengeluaran stok oleh Kepala Gudang.`,
+        title: 'SIV Di-ACC & Divalidasi Admin Store (Menunggu Verifikasi Kepala Store)',
+        message: `Nota #${voucher.voucherNumber} telah di-ACC & divalidasi oleh Admin Store (${adminOfficer}) untuk penerima ${payload.recipientName.trim()}. SIV kini terkunci (stok belum berubah), menunggu verifikasi pengeluaran stok oleh Kepala Store.`,
         voucherId: voucher.id,
         read: false,
         timestamp: nowIso,
@@ -1964,16 +2667,16 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'APPROVAL_WORKFLOW',
         action: 'SIV_APPROVED',
-        title: 'ACC SIV & Validasi Barang oleh Admin Gudang (SIV Terkunci · Stok Belum Berubah)',
-        description: `Admin Gudang (${adminOfficer}) meng-ACC Nota #${voucher.voucherNumber} dan memvalidasi scan barcode barang untuk penerima "${payload.recipientName.trim()}". SIV terkunci (pemohon tidak dapat edit/hapus), stok fisik belum berubah menunggu verifikasi Kepala Gudang. Barang divalidasi: ${issuedSummary || 'Tidak ada (0)'}${cancelledSummary ? `. Batal dikeluarkan (Qty 0): ${cancelledSummary}` : ''}.`,
+        title: 'ACC SIV & Validasi Barang oleh Admin Store (SIV Terkunci · Stok Belum Berubah)',
+        description: `Admin Store (${adminOfficer}) meng-ACC Nota #${voucher.voucherNumber} dan memvalidasi scan barcode barang untuk penerima "${payload.recipientName.trim()}". SIV terkunci (pemohon tidak dapat edit/hapus), stok fisik belum berubah menunggu verifikasi Kepala Store. Barang divalidasi: ${issuedSummary || 'Tidak ada (0)'}${cancelledSummary ? `. Batal dikeluarkan (Qty 0): ${cancelledSummary}` : ''}.`,
         referenceNumber: voucher.voucherNumber,
       });
 
       setActiveToast({
         id: Math.random().toString(),
         type: 'success',
-        title: 'ACC & Validasi Admin Gudang Selesai (SIV Terkunci)',
-        message: `Nota #${voucher.voucherNumber} telah terkunci. Stok fisik belum berubah — menunggu verifikasi pengeluaran stock oleh Kepala Gudang.`,
+        title: 'ACC & Validasi Admin Store Selesai (SIV Terkunci)',
+        message: `Nota #${voucher.voucherNumber} telah terkunci. Stok fisik belum berubah — menunggu verifikasi pengeluaran stock oleh Kepala Store.`,
         voucherNumber: voucher.voucherNumber,
       });
 
@@ -1984,8 +2687,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     [currentUser, issueVouchers, addActivityLog]
   );
 
-  // 3B. Tahap 3 (Oleh User Kepala Gudang): Verifikasi Pengeluaran Stock yang dilakukan Admin Gudang
-  // - Otomatis mempengaruhi / memotong stock fisik gudang (currentStock) dan mencatat Kartu Stok!
+  // 3B. Tahap 3 (Oleh Kepala Store / Super User): Verifikasi Pengeluaran Stock yang dilakukan Admin Store
   const approveIssueVoucher = useCallback(
     (
       voucherId: string,
@@ -1997,6 +2699,19 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         recipientName?: string;
       }
     ) => {
+      if (isStockLockedForOpname) {
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'error',
+          title: 'Stok Store Ter-Lock (Stock Opname Aktif)',
+          message: `Tidak dapat meng-approve pengurangan stok SIV selama sesi Stock Opname #${activeStockOpname?.opnameNumber} sedang berlangsung.`,
+        });
+        return {
+          success: false,
+          error: `Stok Store sedang TER-LOCK karena proses Stock Opname (#${activeStockOpname?.opnameNumber}) sedang berlangsung! Selesaikan Stock Opname terlebih dahulu.`,
+        };
+      }
+
       const voucher = issueVouchers.find((v) => v.id === voucherId);
       if (!voucher) {
         return { success: false, error: 'Nota pengambilan barang tidak ditemukan.' };
@@ -2005,15 +2720,15 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       if (voucher.status === 'HANDOVER_COMPLETED') {
         return {
           success: false,
-          error: 'Pengeluaran stock untuk SIV ini sudah diverifikasi oleh Kepala Gudang sebelumnya!',
+          error: 'Pengeluaran stock untuk SIV ini sudah diverifikasi oleh Kepala Store sebelumnya!',
         };
       }
 
-      if (currentUser?.role !== 'kepala_gudang') {
+      if (!getEffectivePermissions(currentUser).canApproveSIVStockDeduction) {
         return {
           success: false,
           error:
-            'User Admin hanya berwenang melakukan ACC & validasi barang/scan. Approve pengurangan stock hanya dapat dilakukan oleh User Kepala Gudang!',
+            'Akun Anda tidak memiliki hak akses untuk meng-approve pengurangan stock SIV (membutuhkan akses Level 0 Super User atau Level 1 Kepala Store).',
         };
       }
 
@@ -2021,7 +2736,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         return {
           success: false,
           error:
-            'Nota SIV ini belum di-ACC dan belum divalidasi/scan barang oleh User Admin Gudang! Silakan lakukan ACC & validasi barang oleh Admin Gudang terlebih dahulu.',
+            'Nota SIV ini belum di-ACC dan belum divalidasi/scan barang oleh Admin Store! Silakan lakukan ACC & validasi barang oleh Admin Store terlebih dahulu.',
         };
       }
 
@@ -2030,9 +2745,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       const headUser = users.find((u) => u.role === 'kepala_gudang');
       const warehouseHeadName =
         handover?.warehouseHeadName?.trim() ||
-        (currentUser?.role === 'kepala_gudang' ? currentUser.name : headUser?.name || 'Suryadi');
+        currentUser?.name ||
+        headUser?.name ||
+        'Suryadi';
 
-      // Status === 'APPROVED': Kepala Gudang meng-approve pengurangan stock yang sudah divalidasi Admin Gudang -> Otomatis mempengaruhi / memotong stock!
       const adminOfficer =
         voucher.handoverOfficer || voucher.approvedByAdmin || 'Hendra Gunawan';
       const recipientName = voucher.recipientName || voucher.requestedBy;
@@ -2047,15 +2763,16 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         recipientName,
         warehouseHeadName,
         approvedByWarehouseHead: warehouseHeadName,
+        approvedByWarehouseHeadId: currentUser?.id || headUser?.id,
+        approvedByWarehouseHeadUsername: currentUser?.username || headUser?.username,
         headApprovedAt: nowIso,
         approvedAt: nowIso,
         notes: handover?.notes
-          ? `${voucher.notes ? voucher.notes + ' | ' : ''}Verifikasi Kepala Gudang: ${handover.notes}`
+          ? `${voucher.notes ? voucher.notes + ' | ' : ''}Verifikasi Kepala Store: ${handover.notes}`
           : voucher.notes,
         updatedAt: nowIso,
       };
 
-      // Potong stok fisik HANYA untuk barang dengan issuedQty > 0 yang telah divalidasi Admin Gudang
       const newMovements: StockMovement[] = [];
       const updatedStockItems = stockItems.map((stock) => {
         const vItem = voucher.items.find(
@@ -2083,8 +2800,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
             balanceBefore,
             balanceAfter,
             date: nowIso,
-            actor: `${warehouseHeadName} (Verifikasi Kepala Gudang) & ${adminOfficer} (Admin Gudang)`,
-            notes: `Verifikasi pengeluaran stock oleh Kepala Gudang (${warehouseHeadName}) atas validasi Admin Gudang (${adminOfficer})`,
+            actor: `${warehouseHeadName} (Verifikasi Kepala Store) & ${adminOfficer} (Admin Store)`,
+            notes: `Verifikasi pengeluaran stock oleh Kepala Store (${warehouseHeadName}) atas validasi Admin Store (${adminOfficer})`,
           });
         }
 
@@ -2105,8 +2822,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         id: `notif_${Date.now()}`,
         targetUserId: voucher.userId,
         type: 'voucher_approved',
-        title: 'Kepala Gudang Memverifikasi Pengeluaran Stock SIV (Stok Terpotong)',
-        message: `Kepala Gudang (${warehouseHeadName}) telah memverifikasi pengeluaran stock Nota #${voucher.voucherNumber}. Stok fisik gudang otomatis diperbarui.`,
+        title: 'Kepala Store Memverifikasi Pengeluaran Stock SIV (Stok Terpotong)',
+        message: `Kepala Store (${warehouseHeadName}) telah memverifikasi pengeluaran stock Nota #${voucher.voucherNumber}. Stok fisik store otomatis diperbarui.`,
         voucherId: voucher.id,
         read: false,
         timestamp: nowIso,
@@ -2124,8 +2841,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       addActivityLog({
         category: 'APPROVAL_WORKFLOW',
         action: 'SIV_HANDOVER_COMPLETED',
-        title: 'Verifikasi Pengeluaran Stock oleh Kepala Gudang',
-        description: `Kepala Gudang (${warehouseHeadName}) memverifikasi pengeluaran stock Nota #${voucher.voucherNumber} yang divalidasi oleh Admin Gudang (${adminOfficer}). Stok fisik otomatis dipotong.`,
+        title: 'Verifikasi Pengeluaran Stock oleh Kepala Store',
+        description: `Kepala Store (${warehouseHeadName}) memverifikasi pengeluaran stock Nota #${voucher.voucherNumber} yang divalidasi oleh Admin Store (${adminOfficer}). Stok fisik otomatis dipotong.`,
         referenceNumber: voucher.voucherNumber,
       });
 
@@ -2133,8 +2850,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         addActivityLog({
           category: 'STOCK_ADJUSTMENT',
           action: 'STOCK_DEDUCTED_SIV',
-          title: 'Pemotongan Otomatis Stok Fisik (Verifikasi Kepala Gudang)',
-          description: `Stok fisik gudang otomatis berkurang setelah verifikasi Kepala Gudang (${warehouseHeadName}) pada Nota #${voucher.voucherNumber}: ${issuedSummary}.`,
+          title: 'Pemotongan Otomatis Stok Fisik (Verifikasi Kepala Store)',
+          description: `Stok fisik store otomatis berkurang setelah verifikasi Kepala Store (${warehouseHeadName}) pada Nota #${voucher.voucherNumber}: ${issuedSummary}.`,
           referenceNumber: voucher.voucherNumber,
         });
       }
@@ -2142,8 +2859,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       setActiveToast({
         id: Math.random().toString(),
         type: 'success',
-        title: 'Verifikasi Kepala Gudang Selesai (Stok Otomatis Berkurang)',
-        message: `Nota #${voucher.voucherNumber} telah diverifikasi oleh Kepala Gudang (${warehouseHeadName}). Stok fisik resmi terpotong.`,
+        title: 'Verifikasi Kepala Store Selesai (Stok Otomatis Berkurang)',
+        message: `Nota #${voucher.voucherNumber} telah diverifikasi oleh Kepala Store (${warehouseHeadName}). Stok fisik resmi terpotong.`,
         voucherNumber: voucher.voucherNumber,
       });
 
@@ -2595,10 +3312,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     adminNotes?: string,
     verifiedMinStock?: number
   ) => {
-    if (currentUser?.role !== 'admin') {
+    if (!getEffectivePermissions(currentUser).canVerifyMinStock) {
       return {
         success: false,
-        error: 'Hanya User Admin Gudang yang berwenang melakukan verifikasi pengajuan stok minimal.',
+        error: 'Akun Anda tidak memiliki hak akses untuk memverifikasi pengajuan stok minimal.',
       };
     }
     const proposal = minStockProposals.find((p) => p.id === proposalId);
@@ -2614,7 +3331,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         : proposal.proposedMinStock;
     const notesText =
       adminNotes?.trim() ||
-      'Telah diverifikasi oleh Admin Gudang. Permohonan dikunci dan diteruskan ke Kepala Gudang untuk persetujuan akhir.';
+      'Telah diverifikasi. Permohonan dikunci dan diteruskan untuk persetujuan akhir.';
 
     // Update status proposal menjadi 'VERIFIED_ADMIN' (Terkunci, tetapi TIDAK mengubah StockItem.minStock dulu!)
     setMinStockProposals((prev) =>
@@ -2624,10 +3341,10 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
               ...p,
               status: 'VERIFIED_ADMIN',
               verifiedMinStock: verifiedVal,
-              verifiedByAdmin: currentUser.name,
+              verifiedByAdmin: currentUser?.name || 'Admin',
               verifiedAt: now,
               adminVerificationNotes: notesText,
-              reviewedByAdmin: currentUser.name,
+              reviewedByAdmin: currentUser?.name || 'Admin',
               reviewedAt: now,
               adminNotes: notesText,
             }
@@ -2638,8 +3355,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     addActivityLog({
       category: 'APPROVAL_WORKFLOW',
       action: 'MIN_STOCK_VERIFIED',
-      title: 'Verifikasi Pengajuan Stok Minimal oleh Admin Gudang (Permohonan Terkunci)',
-      description: `Admin Gudang (${currentUser.name}) memverifikasi pengajuan #${proposal.proposalNumber} untuk ${proposal.itemName} (${proposal.sku}) sebesar ${verifiedVal} ${proposal.unit}. Permohonan telah terkunci (data minimal stock pada sistem belum berubah; menunggu approval Kepala Gudang).`,
+      title: 'Verifikasi Pengajuan Stok Minimal (Permohonan Terkunci)',
+      description: `${currentUser?.name || 'Admin'} (${getRoleLabel(currentUser?.role || 'admin')}) memverifikasi pengajuan #${proposal.proposalNumber} untuk ${proposal.itemName} (${proposal.sku}) sebesar ${verifiedVal} ${proposal.unit}.`,
       referenceNumber: proposal.proposalNumber,
     });
 
@@ -2649,7 +3366,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       targetRole: 'kepala_gudang',
       type: 'min_stock_verified',
       title: 'Menunggu Approval Kepala Gudang: Stok Minimal Terverifikasi',
-      message: `Admin Gudang (${currentUser.name}) telah memverifikasi usulan stok minimal #${proposal.proposalNumber} (${proposal.itemName}: ${proposal.currentMinStock} -> ${verifiedVal} ${proposal.unit}). Menunggu approval Kepala Gudang untuk mengubah data sistem.`,
+      message: `${currentUser?.name || 'Admin'} telah memverifikasi usulan stok minimal #${proposal.proposalNumber} (${proposal.itemName}: ${proposal.currentMinStock} -> ${verifiedVal} ${proposal.unit}). Menunggu approval untuk mengubah data sistem.`,
       proposalId: proposal.id,
       read: false,
       timestamp: now,
@@ -2659,8 +3376,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       id: `notif_${Date.now()}_user`,
       targetUserId: proposal.requestedByUserId,
       type: 'min_stock_verified',
-      title: 'Pengajuan Stok Minimal Diverifikasi Admin Gudang (Terkunci)',
-      message: `Permohonan #${proposal.proposalNumber} (${proposal.itemName}) telah diverifikasi oleh Admin Gudang (${currentUser.name}) dan terkunci. Menunggu approval Kepala Gudang agar batas stok minimal sistem berubah.`,
+      title: 'Pengajuan Stok Minimal Diverifikasi (Terkunci)',
+      message: `Permohonan #${proposal.proposalNumber} (${proposal.itemName}) telah diverifikasi oleh ${currentUser?.name || 'Admin'} dan terkunci.`,
       proposalId: proposal.id,
       read: false,
       timestamp: now,
@@ -2671,35 +3388,28 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     setActiveToast({
       id: Math.random().toString(),
       type: 'info',
-      title: 'Terverifikasi Admin Gudang (Permohonan Terkunci)',
-      message: `Usulan #${proposal.proposalNumber} telah diverifikasi & terkunci. Data minimal stock sistem belum berubah dan menunggu Approved Kepala Gudang.`,
+      title: 'Pengajuan Stok Minimal Terverifikasi (Terkunci)',
+      message: `Usulan #${proposal.proposalNumber} telah diverifikasi & terkunci.`,
     });
 
     return { success: true };
   };
 
-  // Tahap 3: Approval Final oleh User Kepala Gudang dari hasil verifikasi Admin Gudang
+  // Tahap 3: Approval Final oleh Level 0 (Super User) / Level 1 (Kepala Gudang)
   // -> Data minimal stock pada sistem RESMI BERUBAH!
   const approveMinStockProposal = (proposalId: string, headNotes?: string) => {
     const proposal = minStockProposals.find((p) => p.id === proposalId);
     if (!proposal) return { success: false, error: 'Pengajuan tidak ditemukan' };
 
-    if (currentUser?.role !== 'kepala_gudang') {
+    if (!getEffectivePermissions(currentUser).canApproveMinStockSystem) {
       return {
         success: false,
         error:
-          'User Admin hanya melakukan verifikasi & kunci permohonan. Approve perubahan minimal stock sistem hanya dapat dilakukan oleh User Kepala Gudang!',
+          'Akun Anda tidak memiliki hak akses untuk meng-approve & merubah stok minimal di sistem (membutuhkan akses Level 0 Super User atau Level 1 Kepala Gudang).',
       };
     }
 
-    if (proposal.status === 'PENDING') {
-      return {
-        success: false,
-        error: 'Pengajuan ini belum diverifikasi oleh User Admin Gudang! Admin Gudang wajib memverifikasi terlebih dahulu sebelum di-approve Kepala Gudang.',
-      };
-    }
-
-    if (proposal.status !== 'VERIFIED_ADMIN') {
+    if (proposal.status === 'APPROVED' || proposal.status === 'REJECTED') {
       return { success: false, error: 'Pengajuan sudah diproses sebelumnya' };
     }
 
@@ -2708,7 +3418,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     const headApproverName = currentUser?.name || 'Suryadi';
     const notesText =
       headNotes?.trim() ||
-      'Disetujui (Approved) oleh Kepala Gudang dari hasil verifikasi Admin Gudang. Data minimal stock pada sistem resmi diperbarui.';
+      'Disetujui (Approved) dan data minimal stock pada sistem resmi diperbarui.';
 
     // 1. Update proposal status menjadi 'APPROVED'
     setMinStockProposals((prev) =>
@@ -2717,6 +3427,9 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           ? {
               ...p,
               status: 'APPROVED',
+              verifiedMinStock: p.verifiedMinStock ?? p.proposedMinStock,
+              verifiedByAdmin: p.verifiedByAdmin || headApproverName,
+              verifiedAt: p.verifiedAt || now,
               approvedByWarehouseHead: headApproverName,
               approvedAt: now,
               headApprovalNotes: notesText,
@@ -2740,8 +3453,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     addActivityLog({
       category: 'APPROVAL_WORKFLOW',
       action: 'MIN_STOCK_APPROVED',
-      title: 'Approved Kepala Gudang: Perubahan Data Stok Minimal Sistem',
-      description: `Kepala Gudang (${headApproverName}) meng-approve hasil verifikasi Admin Gudang (${proposal.verifiedByAdmin || 'Admin Gudang'}) untuk pengajuan #${proposal.proposalNumber}. Data minimal stock ${proposal.itemName} (${proposal.sku}) pada sistem resmi berubah dari ${proposal.currentMinStock} menjadi ${newMinStock} ${proposal.unit}.`,
+      title: 'Approved Perubahan Data Stok Minimal Sistem',
+      description: `${headApproverName} (${getRoleLabel(currentUser?.role || 'kepala_gudang')}) meng-approve pengajuan #${proposal.proposalNumber}. Data minimal stock ${proposal.itemName} (${proposal.sku}) pada sistem resmi berubah dari ${proposal.currentMinStock} menjadi ${newMinStock} ${proposal.unit}.`,
       referenceNumber: proposal.proposalNumber,
     });
 
@@ -2750,8 +3463,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       id: `notif_${Date.now()}`,
       targetUserId: proposal.requestedByUserId,
       type: 'min_stock_approved',
-      title: 'Approved Kepala Gudang: Data Minimal Stock Sistem Berubah',
-      message: `Pengajuan batas stok minimal #${proposal.proposalNumber} untuk ${proposal.itemName} (${proposal.sku}) sebesar ${newMinStock} ${proposal.unit} telah di-approve oleh Kepala Gudang (${headApproverName}) dari hasil verifikasi Admin Gudang dan resmi mengubah data minimal stock pada sistem.`,
+      title: 'Approved: Data Minimal Stock Sistem Berubah',
+      message: `Pengajuan batas stok minimal #${proposal.proposalNumber} untuk ${proposal.itemName} (${proposal.sku}) sebesar ${newMinStock} ${proposal.unit} telah di-approve oleh ${headApproverName} dan resmi mengubah data minimal stock pada sistem.`,
       proposalId: proposal.id,
       read: false,
       timestamp: now,
@@ -2762,7 +3475,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     setActiveToast({
       id: Math.random().toString(),
       type: 'success',
-      title: 'Approved Kepala Gudang — Minimal Stock Sistem Berubah',
+      title: 'Approved — Minimal Stock Sistem Berubah',
       message: `Data minimal stock ${proposal.itemName} pada sistem resmi berubah dari ${proposal.currentMinStock} menjadi ${newMinStock} ${proposal.unit}.`,
     });
 
@@ -2770,10 +3483,11 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
   };
 
   const rejectMinStockProposal = (proposalId: string, notes: string) => {
-    if (currentUser?.role !== 'admin' && currentUser?.role !== 'kepala_gudang') {
+    const perms = getEffectivePermissions(currentUser);
+    if (!perms.canVerifyMinStock && !perms.canApproveMinStockSystem) {
       return {
         success: false,
-        error: 'Hanya Admin Gudang atau Kepala Gudang yang berwenang menolak pengajuan stok minimal',
+        error: 'Anda tidak memiliki hak akses untuk menolak pengajuan stok minimal',
       };
     }
     const proposal = minStockProposals.find((p) => p.id === proposalId);
@@ -2783,10 +3497,12 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     }
 
     const now = new Date().toISOString();
+    const actorRole = currentUser?.role || 'admin';
+    const actorName = currentUser?.name || 'Admin Store';
     const actorLabel =
-      currentUser.role === 'kepala_gudang'
-        ? `Kepala Gudang (${currentUser.name})`
-        : `Admin Gudang (${currentUser.name})`;
+      actorRole === 'kepala_gudang'
+        ? `Kepala Store (${actorName})`
+        : `Admin Store (${actorName})`;
 
     setMinStockProposals((prev) =>
       prev.map((p) =>
@@ -2794,7 +3510,7 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
           ? {
               ...p,
               status: 'REJECTED',
-              reviewedByAdmin: `${currentUser.name} (${currentUser.role === 'kepala_gudang' ? 'Kepala Gudang' : 'Admin Gudang'})`,
+              reviewedByAdmin: `${actorName} (${actorRole === 'kepala_gudang' ? 'Kepala Store' : 'Admin Store'})`,
               reviewedAt: now,
               adminNotes: notes || `Ditolak oleh ${actorLabel}`,
             }
@@ -2864,9 +3580,13 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       return {
         totalOutQty,
         outFrequency,
+        outboundFrequency: outFrequency,
         lastOutDate,
         velocityCategory,
+        category: velocityCategory,
         velocityLabel,
+        label: velocityLabel,
+        turnoverRatio: Number((totalOutQty / Math.max(1, outFrequency)).toFixed(1)),
       };
     },
     [stockMovements]
@@ -2886,7 +3606,159 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     setSelectedDocumentForPrint(null);
   };
 
+  const updateDatabaseCollection = useCallback(
+    (collectionName: string, data: unknown) => {
+      if (currentUser && currentUser.role !== 'superuser') {
+        return {
+          success: false,
+          error: 'Hanya Super User (Level 0) yang memiliki akses penuh ke Database Master.',
+        };
+      }
+      try {
+        switch (collectionName) {
+          case 'users':
+            if (Array.isArray(data)) setUsers(data as UserAccount[]);
+            break;
+          case 'roleDefinitions':
+            if (Array.isArray(data)) {
+              setDynamicRoleDefinitions(data as RoleLevelDefinition[]);
+              setRoleDefinitions(data as RoleLevelDefinition[]);
+            }
+            break;
+          case 'stockItems':
+            if (Array.isArray(data)) setStockItems(data as StockItem[]);
+            break;
+          case 'lpbDocuments':
+            if (Array.isArray(data)) setLpbDocuments(data as LPBDocument[]);
+            break;
+          case 'issueVouchers':
+            if (Array.isArray(data)) setIssueVouchers(data as IssueVoucherDocument[]);
+            break;
+          case 'stockMovements':
+            if (Array.isArray(data)) setStockMovements(data as StockMovement[]);
+            break;
+          case 'minStockProposals':
+            if (Array.isArray(data)) setMinStockProposals(data as MinStockProposal[]);
+            break;
+          case 'costCenters':
+            if (Array.isArray(data)) setCostCenters(data as CostCenterEntry[]);
+            break;
+          case 'glAccounts':
+            if (Array.isArray(data)) setGlAccounts(data as GLAccountEntry[]);
+            break;
+          case 'storageLocations':
+            if (Array.isArray(data)) setStorageLocations(data as StorageLocation[]);
+            break;
+          case 'companyProfile':
+            if (data && typeof data === 'object') setCompanyProfile(data as CompanyProfile);
+            break;
+          case 'activityLogs':
+            if (Array.isArray(data)) setActivityLogs(data as SystemActivityLog[]);
+            break;
+          case 'notifications':
+            if (Array.isArray(data)) setNotifications(data as AppNotification[]);
+            break;
+          case 'stockOpnameSessions':
+            if (Array.isArray(data)) setStockOpnameSessions(data as StockOpnameSession[]);
+            break;
+          case 'locationTransferRequests':
+            if (Array.isArray(data)) setLocationTransferRequests(data as LocationTransferRequest[]);
+            break;
+          default:
+            return { success: false, error: `Koleksi database "${collectionName}" tidak dikenal.` };
+        }
+
+        addActivityLog({
+          category: 'MASTER_DATA',
+          action: 'DB_COLLECTION_UPDATED',
+          title: `Perubahan Langsung Tabel Database (${collectionName})`,
+          description: `Super User (${currentUser?.name || 'Superuser'}) memperbarui tabel database "${collectionName}" melalui Konsol Database Superuser.`,
+          referenceNumber: `DB-${collectionName.toUpperCase()}`,
+        });
+
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'success',
+          title: 'Tabel Database Diperbarui',
+          message: `Koleksi "${collectionName}" berhasil disimpan dan disinkronkan ke server.`,
+        });
+
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Gagal memperbarui koleksi database.',
+        };
+      }
+    },
+    [currentUser, addActivityLog]
+  );
+
+  const replaceEntireDatabase = useCallback(
+    async (dump: Record<string, unknown>) => {
+      if (currentUser && currentUser.role !== 'superuser') {
+        return {
+          success: false,
+          error: 'Hanya Super User (Level 0) yang dapat memulihkan (restore) seluruh database.',
+        };
+      }
+      try {
+        if (Array.isArray(dump.roleDefinitions)) {
+          setDynamicRoleDefinitions(dump.roleDefinitions as RoleLevelDefinition[]);
+          setRoleDefinitions(dump.roleDefinitions as RoleLevelDefinition[]);
+        }
+        if (Array.isArray(dump.users)) setUsers(dump.users as UserAccount[]);
+        if (Array.isArray(dump.stockItems)) setStockItems(dump.stockItems as StockItem[]);
+        if (Array.isArray(dump.lpbDocuments)) setLpbDocuments(dump.lpbDocuments as LPBDocument[]);
+        if (Array.isArray(dump.issueVouchers))
+          setIssueVouchers(dump.issueVouchers as IssueVoucherDocument[]);
+        if (Array.isArray(dump.stockMovements))
+          setStockMovements(dump.stockMovements as StockMovement[]);
+        if (Array.isArray(dump.minStockProposals))
+          setMinStockProposals(dump.minStockProposals as MinStockProposal[]);
+        if (Array.isArray(dump.costCenters)) setCostCenters(dump.costCenters as CostCenterEntry[]);
+        if (Array.isArray(dump.glAccounts)) setGlAccounts(dump.glAccounts as GLAccountEntry[]);
+        if (Array.isArray(dump.storageLocations))
+          setStorageLocations(dump.storageLocations as StorageLocation[]);
+        if (dump.companyProfile && typeof dump.companyProfile === 'object') {
+          setCompanyProfile(dump.companyProfile as CompanyProfile);
+        }
+        if (Array.isArray(dump.activityLogs))
+          setActivityLogs(dump.activityLogs as SystemActivityLog[]);
+        if (Array.isArray(dump.notifications))
+          setNotifications(dump.notifications as AppNotification[]);
+        if (Array.isArray(dump.stockOpnameSessions))
+          setStockOpnameSessions(dump.stockOpnameSessions as StockOpnameSession[]);
+        if (Array.isArray(dump.locationTransferRequests))
+          setLocationTransferRequests(dump.locationTransferRequests as LocationTransferRequest[]);
+
+        await fetch('/api/superuser/database', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(dump),
+        });
+
+        setActiveToast({
+          id: Math.random().toString(),
+          type: 'success',
+          title: 'Database Master Berhasil Dipulihkan',
+          message: 'Seluruh koleksi database aplikasi telah diperbarui dan disinkronkan ke server.',
+        });
+
+        return { success: true };
+      } catch (err) {
+        return {
+          success: false,
+          error: err instanceof Error ? err.message : 'Gagal memulihkan database.',
+        };
+      }
+    },
+    [currentUser]
+  );
+
   const resetToDefaultData = () => {
+    setDynamicRoleDefinitions(INITIAL_ROLE_DEFINITIONS);
+    setRoleDefinitions(INITIAL_ROLE_DEFINITIONS);
     setStockItems(INITIAL_STOCK_ITEMS);
     setLpbDocuments(INITIAL_LPB_DOCUMENTS);
     setIssueVouchers(INITIAL_ISSUE_VOUCHERS);
@@ -2895,11 +3767,13 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     setCostCenters(INITIAL_COST_CENTERS);
     setGlAccounts(INITIAL_GL_ACCOUNTS);
     setMinStockProposals(INITIAL_MIN_STOCK_PROPOSALS);
+    setStockOpnameSessions([]);
+    setLocationTransferRequests([]);
     setActivityLogs(INITIAL_ACTIVITY_LOGS);
     setUsers(INITIAL_USERS);
-    setCurrentUser(INITIAL_USERS[0]);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+    setCurrentUser((prev) => prev || INITIAL_USERS[0]);
     localStorage.removeItem(STORAGE_KEYS.USERS);
+    localStorage.removeItem(STORAGE_KEYS.ROLE_DEFINITIONS);
     localStorage.removeItem(STORAGE_KEYS.STOCK_ITEMS);
     localStorage.removeItem(STORAGE_KEYS.LPB_DOCS);
     localStorage.removeItem(STORAGE_KEYS.ISSUE_VOUCHERS);
@@ -2910,6 +3784,8 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
     localStorage.removeItem(STORAGE_KEYS.STORAGE_LOCATIONS);
     localStorage.removeItem(STORAGE_KEYS.COMPANY_PROFILE);
     localStorage.removeItem(STORAGE_KEYS.MIN_STOCK_PROPOSALS);
+    localStorage.removeItem(STORAGE_KEYS.STOCK_OPNAME_SESSIONS);
+    localStorage.removeItem(STORAGE_KEYS.LOCATION_TRANSFER_REQUESTS);
     localStorage.removeItem(STORAGE_KEYS.ACTIVITY_LOGS);
     setStorageLocations(INITIAL_STORAGE_LOCATIONS);
     setCompanyProfile(INITIAL_COMPANY_PROFILE);
@@ -2917,22 +3793,944 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
       id: Math.random().toString(),
       type: 'info',
       title: 'Data Demo Direset',
-      message: 'Seluruh data master stok, akun login, Cost Center, GL Account, lokasi rak, profil perusahaan, pengajuan stok minimal, LPB, dan nota dikembalikan ke kondisi awal.',
+      message: 'Seluruh data master stok, akun login, kategori level, Cost Center, GL Account, lokasi rak, profil perusahaan, pengajuan stok minimal, LPB, dan nota dikembalikan ke kondisi awal.',
     });
   };
+
+  const resetAllTransactionsAndStock = useCallback(
+    async (mode: 'EMPTY_ALL' | 'ZERO_STOCK_ONLY' = 'EMPTY_ALL') => {
+      const nowIso = new Date().toISOString();
+      const clearedStockItems: StockItem[] =
+        mode === 'ZERO_STOCK_ONLY'
+          ? stockItems.map((item) => ({
+              ...item,
+              currentStock: 0,
+              allocatedStock: 0,
+              updatedAt: nowIso,
+            }))
+          : [];
+
+      const resetLogEntry: SystemActivityLog = {
+        id: `log_reset_all_${Date.now()}`,
+        timestamp: nowIso,
+        actorId: currentUser?.id || 'system',
+        actorName: currentUser?.name || 'System Administrator',
+        actorUsername: currentUser?.username || 'system',
+        actorRole: currentUser?.role || 'superuser',
+        actorDepartment: currentUser?.department || 'Operasional Store',
+        category: 'STOCK_ADJUSTMENT',
+        action: mode === 'ZERO_STOCK_ONLY' ? 'RESET_TRANSACTIONS_ZERO_STOCK' : 'RESET_ALL_EMPTY',
+        title:
+          mode === 'ZERO_STOCK_ONLY'
+            ? 'Reset All: Kosongkan Transaksi (LPB & SIV) & Nolkan Saldo Stok'
+            : 'Reset All: Kosongkan Semua Transaksi & Stok (LPB, Stok & SIV Kosong)',
+        description:
+          mode === 'ZERO_STOCK_ONLY'
+            ? `Seluruh dokumen LPB, Nota SIV, Kartu Stok, dan Sesi Opname telah dikosongkan. Saldo fisik & alokasi ${clearedStockItems.length} item barang direset menjadi 0.`
+            : 'Seluruh transaksi LPB, Nota Pengambilan Barang (SIV), Master Stok Barang, Kartu Stok, dan Sesi Stock Opname telah dikosongkan kembali (0 data).',
+        referenceNumber: 'RESET-ALL',
+      };
+
+      const nextLogs = [resetLogEntry, ...activityLogs];
+
+      setStockItems(clearedStockItems);
+      setLpbDocuments([]);
+      setIssueVouchers([]);
+      setStockMovements([]);
+      setStockOpnameSessions([]);
+      setMinStockProposals([]);
+      setLocationTransferRequests([]);
+      setNotifications([]);
+      setActivityLogs(nextLogs);
+
+      try {
+        localStorage.setItem(STORAGE_KEYS.STOCK_ITEMS, JSON.stringify(clearedStockItems));
+        localStorage.setItem(STORAGE_KEYS.LPB_DOCS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.ISSUE_VOUCHERS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.STOCK_MOVEMENTS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.STOCK_OPNAME_SESSIONS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.MIN_STOCK_PROPOSALS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.LOCATION_TRANSFER_REQUESTS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify([]));
+        localStorage.setItem(STORAGE_KEYS.ACTIVITY_LOGS, JSON.stringify(nextLogs));
+      } catch {
+        // ignore storage errors
+      }
+
+      // Immediately push the cleared state to the server so SQLite/SQL dump and other devices are synced
+      const resetPayload = {
+        stockItems: clearedStockItems,
+        lpbDocuments: [],
+        issueVouchers: [],
+        stockMovements: [],
+        notifications: [],
+        costCenters,
+        glAccounts,
+        storageLocations,
+        companyProfile,
+        minStockProposals: [],
+        stockOpnameSessions: [],
+        locationTransferRequests: [],
+        activityLogs: nextLogs,
+        users,
+        roleDefinitions,
+      };
+      lastSyncedPayloadHash.current = JSON.stringify(resetPayload);
+      try {
+        setIsSyncingToServer(true);
+        const res = await fetch('/api/inventory/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(resetPayload),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const nextVer = data?.version || lastSyncedVersion.current + 1;
+          lastSyncedVersion.current = nextVer;
+          setSyncRevision(nextVer);
+          setLastSyncTimestamp(new Date().toISOString());
+          setSyncError(null);
+          setIsServerConnected(true);
+          await saveInventoryStateToFirestore({
+            ...resetPayload,
+            updatedAt: new Date().toISOString(),
+            version: nextVer,
+          });
+        }
+      } catch {
+        // ignore network errors
+      } finally {
+        setIsSyncingToServer(false);
+      }
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title:
+          mode === 'ZERO_STOCK_ONLY'
+            ? 'Transaksi Dikosongkan & Stok Dinolkan'
+            : 'Semua Transaksi & Stok Dikosongkan',
+        message:
+          mode === 'ZERO_STOCK_ONLY'
+            ? 'Seluruh transaksi LPB, SIV, Kartu Stok, dan Opname telah dikosongkan. Saldo seluruh item barang kini menjadi 0.'
+            : 'Seluruh transaksi LPB, Stok Barang, SIV, Kartu Stok, dan Sesi Opname berhasil dikosongkan kembali.',
+      });
+    },
+    [
+      stockItems,
+      currentUser,
+      activityLogs,
+      costCenters,
+      glAccounts,
+      storageLocations,
+      companyProfile,
+      users,
+      roleDefinitions,
+    ]
+  );
+
+  // Shared Server Synchronization (Multi-device public access without Gmail login)
+  const isInitialServerFetchDone = React.useRef(false);
+  const isApplyingRemoteState = React.useRef(false);
+  const lastSyncedPayloadHash = React.useRef<string>('');
+  const lastSyncedVersion = React.useRef<number>(1);
+  const [syncRevision, setSyncRevision] = useState<number>(1);
+  const [isServerConnected, setIsServerConnected] = useState<boolean>(true);
+  const [isSyncingToServer, setIsSyncingToServer] = useState<boolean>(false);
+  const [lastSyncTimestamp, setLastSyncTimestamp] = useState<string>(() => new Date().toISOString());
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [deviceModeState, setDeviceModeState] = useState<'ANDROID' | 'WEBSITE'>('WEBSITE');
+
+  const setDeviceMode = useCallback((mode: 'ANDROID' | 'WEBSITE') => {
+    setDeviceModeState(mode);
+  }, []);
+
+  const showToast = useCallback(
+    (message: string, type: 'success' | 'info' | 'warning' | 'error' = 'info') => {
+      setActiveToast({
+        id: Math.random().toString(),
+        type,
+        title: type === 'success' ? 'Berhasil' : type === 'warning' ? 'Perhatian' : 'Informasi',
+        message,
+      });
+    },
+    []
+  );
+
+  const showCustomToast = useCallback((toast: Omit<ToastInfo, 'id'>) => {
+    setActiveToast({
+      ...toast,
+      id: `toast_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+    });
+  }, []);
+
+  const applyRemoteSnapshot = useCallback((s: Record<string, unknown>, remoteVer: number) => {
+    isApplyingRemoteState.current = true;
+    lastSyncedVersion.current = remoteVer;
+    setSyncRevision(remoteVer);
+    setLastSyncTimestamp(new Date().toISOString());
+    setIsServerConnected(true);
+    setSyncError(null);
+
+    let nextRoles: RoleLevelDefinition[] | undefined;
+    if (Array.isArray(s.roleDefinitions) && s.roleDefinitions.length > 0) {
+      nextRoles = (s.roleDefinitions as RoleLevelDefinition[]).map((d) => ({
+        ...d,
+        name: normalizeGudangToStoreText(d.name),
+        badgeLabel: normalizeGudangToStoreText(d.badgeLabel),
+        description: normalizeGudangToStoreText(d.description),
+      }));
+      setDynamicRoleDefinitions(nextRoles);
+      setRoleDefinitions(nextRoles);
+    }
+    if (Array.isArray(s.stockItems)) setStockItems(s.stockItems as StockItem[]);
+    if (Array.isArray(s.lpbDocuments)) setLpbDocuments(s.lpbDocuments as LPBDocument[]);
+    if (Array.isArray(s.issueVouchers))
+      setIssueVouchers(s.issueVouchers as IssueVoucherDocument[]);
+    if (Array.isArray(s.stockMovements)) setStockMovements(s.stockMovements as StockMovement[]);
+    if (Array.isArray(s.notifications)) setNotifications(s.notifications as AppNotification[]);
+    if (Array.isArray(s.costCenters) && s.costCenters.length > 0)
+      setCostCenters(s.costCenters as CostCenterEntry[]);
+    if (Array.isArray(s.glAccounts) && s.glAccounts.length > 0)
+      setGlAccounts(s.glAccounts as GLAccountEntry[]);
+    if (Array.isArray(s.storageLocations) && s.storageLocations.length > 0)
+      setStorageLocations(s.storageLocations as StorageLocation[]);
+    let nextProfile: CompanyProfile | undefined;
+    if (s.companyProfile && typeof s.companyProfile === 'object') {
+      nextProfile = normalizeCompanyProfile(s.companyProfile as Partial<CompanyProfile>);
+      setCompanyProfile(nextProfile);
+    }
+    if (Array.isArray(s.minStockProposals))
+      setMinStockProposals(s.minStockProposals as MinStockProposal[]);
+    if (Array.isArray(s.stockOpnameSessions))
+      setStockOpnameSessions(s.stockOpnameSessions as StockOpnameSession[]);
+    if (Array.isArray(s.locationTransferRequests))
+      setLocationTransferRequests(s.locationTransferRequests as LocationTransferRequest[]);
+    if (Array.isArray(s.activityLogs)) setActivityLogs(s.activityLogs as SystemActivityLog[]);
+    let nextUsers: UserAccount[] | undefined;
+    if (Array.isArray(s.users) && s.users.length > 0) {
+      nextUsers = normalizeAndSortUsersByLevel(s.users as UserAccount[], false);
+      setUsers(nextUsers);
+      setCurrentUser((prev) => {
+        if (!prev) return null;
+        const found = nextUsers!.find(
+          (u) => u.id === prev.id || u.username.toLowerCase() === prev.username.toLowerCase()
+        );
+        return found || prev;
+      });
+    }
+
+    setTimeout(() => {
+      isApplyingRemoteState.current = false;
+    }, 150);
+  }, []);
+
+  const fetchServerState = useCallback(async () => {
+    try {
+      const res = await fetch('/api/inventory/state');
+      if (!res.ok) {
+        setIsServerConnected(false);
+        setSyncError('Koneksi ke server terputus');
+        return;
+      }
+      const json = await res.json();
+      setIsServerConnected(true);
+      setSyncError(null);
+      setLastSyncTimestamp(new Date().toISOString());
+      if (!json?.state) {
+        isInitialServerFetchDone.current = true;
+        return;
+      }
+      const s = json.state;
+      if (s.version && s.version > lastSyncedVersion.current) {
+        applyRemoteSnapshot(s, s.version);
+      }
+      isInitialServerFetchDone.current = true;
+    } catch {
+      isInitialServerFetchDone.current = true;
+    }
+  }, [applyRemoteSnapshot]);
+
+  const forceSyncNow = useCallback(async () => {
+    await fetchServerState();
+  }, [fetchServerState]);
+
+  useEffect(() => {
+    testFirestoreConnection();
+    fetchServerState();
+    const interval = setInterval(fetchServerState, 8000);
+
+    const unsubscribeFirestore = subscribeToFirestoreInventoryState((s) => {
+      const remoteVersion = typeof s.version === 'number' ? s.version : 0;
+      if (remoteVersion > lastSyncedVersion.current) {
+        applyRemoteSnapshot(s, remoteVersion);
+      }
+    });
+
+    return () => {
+      clearInterval(interval);
+      unsubscribeFirestore();
+    };
+  }, [fetchServerState, applyRemoteSnapshot]);
+
+  useEffect(() => {
+    const payload = {
+      stockItems,
+      lpbDocuments,
+      issueVouchers,
+      stockMovements,
+      notifications,
+      costCenters,
+      glAccounts,
+      storageLocations,
+      companyProfile,
+      minStockProposals,
+      stockOpnameSessions,
+      locationTransferRequests,
+      activityLogs,
+      users,
+      roleDefinitions,
+    };
+    const serialized = JSON.stringify(payload);
+
+    if (!isInitialServerFetchDone.current || isApplyingRemoteState.current) {
+      lastSyncedPayloadHash.current = serialized;
+      return;
+    }
+    if (serialized === lastSyncedPayloadHash.current) {
+      return;
+    }
+    lastSyncedPayloadHash.current = serialized;
+
+    setIsSyncingToServer(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/inventory/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: serialized,
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const nextVer = data?.version || lastSyncedVersion.current + 1;
+          lastSyncedVersion.current = nextVer;
+          setSyncRevision(nextVer);
+          setLastSyncTimestamp(new Date().toISOString());
+          setSyncError(null);
+          setIsServerConnected(true);
+
+          await saveInventoryStateToFirestore({
+            ...payload,
+            updatedAt: new Date().toISOString(),
+            version: nextVer,
+          });
+        } else {
+          setSyncError('Gagal sinkronisasi data ke database');
+        }
+      } catch {
+        setSyncError('Koneksi terputus saat menyimpan ke database');
+      } finally {
+        setIsSyncingToServer(false);
+      }
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [
+    stockItems,
+    lpbDocuments,
+    issueVouchers,
+    stockMovements,
+    notifications,
+    costCenters,
+    glAccounts,
+    storageLocations,
+    companyProfile,
+    minStockProposals,
+    stockOpnameSessions,
+    locationTransferRequests,
+    activityLogs,
+    users,
+    roleDefinitions,
+  ]);
+
+  // ============================================================================
+  // STOCK OPNAME & LOCK STOK STORE (Dimulai oleh Level 1 Kepala Store ke Atas)
+  // ============================================================================
+  const startStockOpname = useCallback(
+    (params: { title: string; notes?: string }) => {
+      if (!currentUser || getRoleLevel(currentUser.role) > 1) {
+        return {
+          success: false,
+          error:
+            'Hanya Kepala Store (Level 1) ke atas yang memiliki otorisasi untuk memulai Stock Opname dan mengunci stok.',
+        };
+      }
+      if (activeStockOpname) {
+        return {
+          success: false,
+          error: `Sesi Stock Opname #${activeStockOpname.opnameNumber} masih aktif! Selesaikan terlebih dahulu sebelum memulai sesi baru.`,
+        };
+      }
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const opnameNumber = `SO-${yearMonth}-${String(stockOpnameSessions.length + 1).padStart(4, '0')}`;
+
+      const entries: StockOpnameItemEntry[] = stockItems.map((item) => ({
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        category: item.category,
+        unit: item.unit,
+        location: item.location,
+        systemStockSnapshot: item.currentStock,
+        allocatedStockSnapshot: item.allocatedStock,
+        physicalStock: null,
+        variance: 0,
+        isCounted: false,
+        barcodeScanned: false,
+      }));
+
+      const newSession: StockOpnameSession = {
+        id: `so_${Date.now()}`,
+        opnameNumber,
+        title: params.title.trim() || `Stock Opname Store Periode ${now.toLocaleDateString('id-ID')}`,
+        status: 'IN_PROGRESS',
+        startedAt: nowIso,
+        startedBy: currentUser.name,
+        startedByUsername: currentUser.username,
+        startedByRole: currentUser.role,
+        notes: params.notes?.trim() || '',
+        items: entries,
+      };
+
+      setStockOpnameSessions((prev) => [newSession, ...prev]);
+
+      addActivityLog({
+        category: 'STOCK_ADJUSTMENT',
+        action: 'STOCK_OPNAME_STARTED',
+        title: 'Mulai Stock Opname — Seluruh Stok Store DI-LOCK',
+        description: `${currentUser.name} (${getRoleLabel(currentUser.role)}) memulai sesi Stock Opname #${opnameNumber} ("${newSession.title}"). Seluruh transaksi penambahan (LPB) dan pengurangan (SIV) stok dikunci sementara sampai Stock Opname selesai.`,
+        referenceNumber: opnameNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'warning',
+        title: 'Stock Opname Dimulai — Stok Store Ter-Lock!',
+        message: `Sesi #${opnameNumber} aktif. Tidak dapat menambah atau mengurangi stok sampai Stock Opname diselesaikan.`,
+      });
+
+      return { success: true, session: newSession };
+    },
+    [currentUser, activeStockOpname, stockOpnameSessions.length, stockItems, addActivityLog]
+  );
+
+  const scanOrUpdateOpnameItem = useCallback(
+    (params: {
+      skuOrId: string;
+      physicalStock?: number;
+      incrementByOne?: boolean;
+      barcodeScanned?: boolean;
+      verifiedLocation?: string;
+      notes?: string;
+    }) => {
+      if (!activeStockOpname) {
+        return {
+          success: false,
+          error: 'Tidak ada sesi Stock Opname yang sedang berlangsung.',
+        };
+      }
+
+      const rawKey = params.skuOrId.trim().replace(/^\*|\*$/g, '').toUpperCase();
+      const targetEntry = activeStockOpname.items.find(
+        (e) => e.itemId.toUpperCase() === rawKey || e.sku.toUpperCase() === rawKey
+      );
+
+      if (!targetEntry) {
+        return {
+          success: false,
+          error: `Barcode / SKU "${params.skuOrId}" tidak ditemukan di dalam daftar Master Barang Store.`,
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      let nextPhysical: number;
+      if (params.incrementByOne) {
+        nextPhysical = (targetEntry.physicalStock ?? 0) + 1;
+      } else if (params.physicalStock !== undefined && params.physicalStock >= 0) {
+        nextPhysical = Number(params.physicalStock);
+      } else {
+        nextPhysical = targetEntry.physicalStock ?? targetEntry.systemStockSnapshot;
+      }
+
+      const updatedEntry: StockOpnameItemEntry = {
+        ...targetEntry,
+        physicalStock: nextPhysical,
+        variance: nextPhysical - targetEntry.systemStockSnapshot,
+        verifiedLocation:
+          params.verifiedLocation !== undefined
+            ? params.verifiedLocation
+            : targetEntry.verifiedLocation || targetEntry.location,
+        isCounted: true,
+        barcodeScanned: params.barcodeScanned ?? targetEntry.barcodeScanned,
+        lastScannedAt: params.barcodeScanned ? nowIso : targetEntry.lastScannedAt || nowIso,
+        countedBy: currentUser
+          ? `${currentUser.name} (@${currentUser.username})`
+          : 'Petugas Opname',
+        notes: params.notes !== undefined ? params.notes : targetEntry.notes,
+      };
+
+      setStockOpnameSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeStockOpname.id
+            ? {
+                ...s,
+                items: s.items.map((it) =>
+                  it.itemId === targetEntry.itemId ? updatedEntry : it
+                ),
+              }
+            : s
+        )
+      );
+
+      return { success: true, entry: updatedEntry };
+    },
+    [activeStockOpname, currentUser]
+  );
+
+  const completeStockOpname = useCallback(
+    (params: { applyAdjustment: boolean; notes?: string }) => {
+      if (!currentUser || getRoleLevel(currentUser.role) > 1) {
+        return {
+          success: false,
+          error:
+            'Hanya Kepala Store (Level 1) ke atas yang dapat menyelesaikan Stock Opname dan membuka kunci stok.',
+        };
+      }
+      if (!activeStockOpname) {
+        return {
+          success: false,
+          error: 'Tidak ada sesi Stock Opname yang aktif.',
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      const newMovements: StockMovement[] = [];
+
+      if (params.applyAdjustment) {
+        const updatedStockItems = stockItems.map((stock) => {
+          const opEntry = activeStockOpname.items.find((e) => e.itemId === stock.id || e.sku === stock.sku);
+          if (!opEntry || !opEntry.isCounted || opEntry.physicalStock === null) {
+            return stock;
+          }
+          const diff = opEntry.physicalStock - stock.currentStock;
+          if (diff !== 0) {
+            newMovements.push({
+              id: `mov_so_${Date.now()}_${stock.id}`,
+              itemId: stock.id,
+              sku: stock.sku,
+              itemName: stock.name,
+              type: diff > 0 ? 'IN' : 'OUT',
+              source: 'PENYESUAIAN_OPNAME',
+              referenceNumber: activeStockOpname.opnameNumber,
+              secondaryRef: `Stock Opname (${diff > 0 ? '+' : ''}${diff} ${stock.unit})`,
+              quantity: Math.abs(diff),
+              balanceBefore: stock.currentStock,
+              balanceAfter: opEntry.physicalStock,
+              date: nowIso,
+              actor: `${currentUser.name} (${getRoleLabel(currentUser.role)})`,
+              notes:
+                opEntry.notes ||
+                `Penyesuaian hasil Stock Opname #${activeStockOpname.opnameNumber} (Sistem: ${stock.currentStock} -> Fisik: ${opEntry.physicalStock} ${stock.unit})`,
+            });
+          }
+          const finalLocation = opEntry.verifiedLocation?.trim() || stock.location;
+          const mergedLocations = Array.from(
+            new Set([
+              finalLocation,
+              stock.location,
+              ...(stock.locations || []),
+            ])
+          ).filter(Boolean);
+
+          return {
+            ...stock,
+            currentStock: opEntry.physicalStock,
+            location: finalLocation,
+            locations: mergedLocations,
+            updatedAt: nowIso,
+          };
+        });
+
+        setStockItems(updatedStockItems);
+        if (newMovements.length > 0) {
+          setStockMovements((prev) => [...newMovements, ...prev]);
+        }
+      }
+
+      setStockOpnameSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeStockOpname.id
+            ? {
+                ...s,
+                status: 'COMPLETED',
+                completedAt: nowIso,
+                completedBy: currentUser.name,
+                appliedAdjustment: params.applyAdjustment,
+                notes: params.notes
+                  ? `${s.notes ? s.notes + ' | ' : ''}${params.notes}`
+                  : s.notes,
+              }
+            : s
+        )
+      );
+
+      addActivityLog({
+        category: 'STOCK_ADJUSTMENT',
+        action: 'STOCK_OPNAME_COMPLETED',
+        title: 'Stock Opname Selesai — Lock Stok Store DIBUKA',
+        description: `${currentUser.name} (${getRoleLabel(currentUser.role)}) menyelesaikan sesi Stock Opname #${activeStockOpname.opnameNumber}. ${
+          params.applyAdjustment
+            ? `${newMovements.length} item disesuaikan dengan stok fisik hasil opname.`
+            : 'Diselesaikan tanpa perubahan saldo stok.'
+        } Kunci stok Store telah dibuka kembali.`,
+        referenceNumber: activeStockOpname.opnameNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title: 'Stock Opname Selesai — Stok Store Dibuka Kembali!',
+        message: `Sesi #${activeStockOpname.opnameNumber} selesai. Transaksi penambahan & pengurangan stok kini dapat dilakukan kembali.`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, activeStockOpname, stockItems, addActivityLog]
+  );
+
+  const cancelStockOpname = useCallback(
+    (reason?: string) => {
+      if (!currentUser || getRoleLevel(currentUser.role) > 1) {
+        return {
+          success: false,
+          error: 'Hanya Kepala Store (Level 1) ke atas yang dapat membatalkan Stock Opname.',
+        };
+      }
+      if (!activeStockOpname) {
+        return { success: false, error: 'Tidak ada sesi Stock Opname yang aktif.' };
+      }
+
+      const nowIso = new Date().toISOString();
+      setStockOpnameSessions((prev) =>
+        prev.map((s) =>
+          s.id === activeStockOpname.id
+            ? {
+                ...s,
+                status: 'CANCELLED',
+                completedAt: nowIso,
+                completedBy: currentUser.name,
+                notes: reason ? `Dibatalkan: ${reason}` : s.notes,
+              }
+            : s
+        )
+      );
+
+      addActivityLog({
+        category: 'STOCK_ADJUSTMENT',
+        action: 'STOCK_OPNAME_CANCELLED',
+        title: 'Pembatalan Stock Opname — Lock Stok Dibuka',
+        description: `${currentUser.name} membatalkan sesi Stock Opname #${activeStockOpname.opnameNumber}. Lock stok telah dibuka tanpa perubahan saldo.`,
+        referenceNumber: activeStockOpname.opnameNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'info',
+        title: 'Stock Opname Dibatalkan (Stok Un-Locked)',
+        message: `Sesi #${activeStockOpname.opnameNumber} dibatalkan dan kunci stok dibuka kembali.`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, activeStockOpname, addActivityLog]
+  );
+
+  // ============================================================================
+  // PINDAH LOKASI BARANG (Admin Mengajukan -> Terealisasi saat Di-ACC Kepala Store)
+  // ============================================================================
+  const createLocationTransferRequest = useCallback(
+    (params: { itemId: string; toLocation: string; reason: string }) => {
+      if (!currentUser) {
+        return { success: false, error: 'Silakan login terlebih dahulu.' };
+      }
+      const perms = getEffectivePermissions(currentUser);
+      if (!perms.canManageStockItems && !perms.canManageCompanyProfile && getRoleLevel(currentUser.role) > 2) {
+        return {
+          success: false,
+          error: 'Hanya Admin Store atau Kepala Store yang dapat mengajukan pemindahan lokasi barang.',
+        };
+      }
+
+      const item = stockItems.find((i) => i.id === params.itemId || i.sku === params.itemId);
+      if (!item) {
+        return { success: false, error: 'Barang tidak ditemukan di Master Stok.' };
+      }
+      const targetLoc = params.toLocation.trim();
+      if (!targetLoc) {
+        return { success: false, error: 'Lokasi rak tujuan wajib dipilih.' };
+      }
+      if (item.location.trim().toLowerCase() === targetLoc.toLowerCase()) {
+        return {
+          success: false,
+          error: `Barang "${item.name}" sudah berada di lokasi "${item.location}". Pilih lokasi rak tujuan yang berbeda.`,
+        };
+      }
+
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const yearMonth = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const transferNumber = `TRF-LOC-${yearMonth}-${String(locationTransferRequests.length + 1).padStart(4, '0')}`;
+
+      const newReq: LocationTransferRequest = {
+        id: `trf_loc_${Date.now()}`,
+        transferNumber,
+        requestNumber: transferNumber,
+        itemId: item.id,
+        sku: item.sku,
+        itemName: item.name,
+        category: item.category,
+        currentStockSnapshot: item.currentStock,
+        unit: item.unit,
+        fromLocation: item.location,
+        toLocation: targetLoc,
+        reason: params.reason.trim() || 'Penataan ulang rak penyimpanan Store',
+        status: 'PENDING_KEPALA',
+        requestedBy: currentUser.name,
+        requestedByUsername: currentUser.username,
+        requestedByRole: currentUser.role,
+        requestedAt: nowIso,
+      };
+
+      setLocationTransferRequests((prev) => [newReq, ...prev]);
+
+      const headNotif: AppNotification = {
+        id: `notif_trf_${Date.now()}`,
+        targetRole: 'kepala_gudang',
+        type: 'lpb_created',
+        title: 'Pengajuan Pindah Lokasi Barang Menunggu ACC Kepala Store',
+        message: `${currentUser.name} mengajukan pemindahan lokasi ${item.name} (${item.sku}) dari "${item.location}" ke "${targetLoc}". Lokasi belum berubah sampai di-ACC Kepala Store.`,
+        read: false,
+        timestamp: nowIso,
+      };
+      setNotifications((prev) => [headNotif, ...prev]);
+
+      addActivityLog({
+        category: 'MASTER_DATA',
+        action: 'LOCATION_TRANSFER_REQUESTED',
+        title: 'Pengajuan Pindah Lokasi Rak Barang oleh Admin Store (Menunggu ACC Kepala Store)',
+        description: `${currentUser.name} mengajukan pindah lokasi barang ${item.name} (${item.sku}) dari rak "${item.location}" ke "${targetLoc}" (#${transferNumber}). Perpindahan lokasi akan terealisasi setelah di-ACC oleh Kepala Store.`,
+        referenceNumber: transferNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'info',
+        title: 'Pengajuan Pindah Lokasi Terkirim',
+        message: `Permohonan #${transferNumber} (${item.location} → ${targetLoc}) menunggu ACC Kepala Store agar perpindahan lokasi terealisasi.`,
+      });
+
+      return { success: true, request: newReq };
+    },
+    [currentUser, stockItems, locationTransferRequests.length, addActivityLog]
+  );
+
+  const approveLocationTransferRequest = useCallback(
+    (requestId: string, approvalNotes?: string) => {
+      if (!currentUser || getRoleLevel(currentUser.role) > 1) {
+        return {
+          success: false,
+          error:
+            'Hanya Kepala Store (Level 1) atau Super User yang dapat meng-ACC dan merealisasikan perpindahan lokasi barang.',
+        };
+      }
+
+      const targetReq = locationTransferRequests.find((r) => r.id === requestId);
+      if (!targetReq) {
+        return { success: false, error: 'Data pengajuan pindah lokasi tidak ditemukan.' };
+      }
+      if (targetReq.status !== 'PENDING_APPROVAL' && targetReq.status !== 'PENDING_KEPALA') {
+        return { success: false, error: 'Pengajuan pindah lokasi ini sudah diproses sebelumnya.' };
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // 1. Update status pengajuan menjadi APPROVED
+      setLocationTransferRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? {
+                ...r,
+                status: 'APPROVED',
+                approvedBy: currentUser.name,
+                approvedAt: nowIso,
+                approvalNotes:
+                  approvalNotes?.trim() || 'Disetujui (ACC) oleh Kepala Store. Lokasi barang resmi dipindahkan.',
+              }
+            : r
+        )
+      );
+
+      // 2. REALISASIKAN PERPINDAHAN LOKASI pada StockItem!
+      setStockItems((prev) =>
+        prev.map((item) =>
+          item.id === targetReq.itemId || item.sku === targetReq.sku
+            ? {
+                ...item,
+                location: targetReq.toLocation,
+                updatedAt: nowIso,
+              }
+            : item
+        )
+      );
+
+      addActivityLog({
+        category: 'MASTER_DATA',
+        action: 'LOCATION_TRANSFER_APPROVED',
+        title: 'ACC Kepala Store — Perpindahan Lokasi Barang Terealisasi',
+        description: `Kepala Store (${currentUser.name}) meng-ACC pengajuan #${targetReq.transferNumber}. Lokasi penyimpanan ${targetReq.itemName} (${targetReq.sku}) resmi berpindah dari "${targetReq.fromLocation}" ke "${targetReq.toLocation}".`,
+        referenceNumber: targetReq.transferNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'success',
+        title: 'ACC Kepala Store — Pindah Lokasi Terealisasi!',
+        message: `Lokasi ${targetReq.itemName} (${targetReq.sku}) resmi berpindah dari "${targetReq.fromLocation}" ke "${targetReq.toLocation}".`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, locationTransferRequests, addActivityLog]
+  );
+
+  const rejectLocationTransferRequest = useCallback(
+    (requestId: string, rejectionReason: string) => {
+      if (!currentUser || getRoleLevel(currentUser.role) > 1) {
+        return {
+          success: false,
+          error: 'Hanya Kepala Store (Level 1) atau Super User yang dapat menolak pengajuan pindah lokasi.',
+        };
+      }
+
+      const targetReq = locationTransferRequests.find((r) => r.id === requestId);
+      if (!targetReq) {
+        return { success: false, error: 'Data pengajuan pindah lokasi tidak ditemukan.' };
+      }
+      if (targetReq.status !== 'PENDING_APPROVAL' && targetReq.status !== 'PENDING_KEPALA') {
+        return { success: false, error: 'Pengajuan pindah lokasi ini sudah diproses sebelumnya.' };
+      }
+
+      const nowIso = new Date().toISOString();
+      setLocationTransferRequests((prev) =>
+        prev.map((r) =>
+          r.id === requestId
+            ? {
+                ...r,
+                status: 'REJECTED',
+                rejectedBy: currentUser.name,
+                rejectedAt: nowIso,
+                rejectionReason: rejectionReason.trim() || 'Ditolak oleh Kepala Store',
+              }
+            : r
+        )
+      );
+
+      addActivityLog({
+        category: 'MASTER_DATA',
+        action: 'LOCATION_TRANSFER_REJECTED',
+        title: 'Penolakan Pengajuan Pindah Lokasi Barang oleh Kepala Store',
+        description: `Kepala Store (${currentUser.name}) menolak pengajuan pindah lokasi #${targetReq.transferNumber} untuk ${targetReq.itemName} (${targetReq.fromLocation} -> ${targetReq.toLocation}). Alasan: ${rejectionReason}`,
+        referenceNumber: targetReq.transferNumber,
+      });
+
+      setActiveToast({
+        id: Math.random().toString(),
+        type: 'warning',
+        title: 'Pengajuan Pindah Lokasi Ditolak',
+        message: `Permohonan #${targetReq.transferNumber} ditolak. Lokasi barang tetap di "${targetReq.fromLocation}".`,
+      });
+
+      return { success: true };
+    },
+    [currentUser, locationTransferRequests, addActivityLog]
+  );
+
+  const syncStatus = React.useMemo(
+    () => ({
+      connected: isServerConnected,
+      isSyncing: isSyncingToServer,
+      revision: syncRevision,
+      lastSyncAt: lastSyncTimestamp,
+      sqlSynced: isServerConnected && !syncError,
+      hasError: Boolean(syncError),
+      errorMessage: syncError || undefined,
+      lastActionSummary: activityLogs[0]?.title || 'Siap menerima transaksi',
+      connectedDevices: currentUser
+        ? [
+            {
+              clientId: currentUser.id,
+              deviceType: deviceModeState,
+              userName: currentUser.name,
+              userRole: getRoleLabel(currentUser.role),
+              deviceName:
+                deviceModeState === 'ANDROID'
+                  ? 'Handheld Scanner (Mobile)'
+                  : 'Komputer Kasir / Store Workstation',
+            },
+          ]
+        : [],
+    }),
+    [
+      isServerConnected,
+      isSyncingToServer,
+      syncRevision,
+      lastSyncTimestamp,
+      syncError,
+      activityLogs,
+      currentUser,
+      deviceModeState,
+    ]
+  );
 
   return (
     <InventoryContext.Provider
       value={{
         currentUser,
         users,
+        publicAccessMode,
+        setPublicAccessMode,
+        loginAsPublicGuest,
         login,
         logout,
+        syncStatus,
+        forceSyncNow,
+        setDeviceMode,
+        showToast,
+        showCustomToast,
         createUser,
         updateUser,
         resetUserPassword,
         deleteUser,
         toggleUserStatus,
+        reorganizeUsersByLevel,
+        roleDefinitions,
+        addRoleDefinition,
+        updateRoleDefinition,
+        deleteRoleDefinition,
+        updateDatabaseCollection,
+        replaceEntireDatabase,
         stockItems,
         lpbDocuments,
         issueVouchers,
@@ -2986,10 +4784,22 @@ export const InventoryProvider: React.FC<{ children: ReactNode }> = ({ children 
         addNewStockItem,
         updateStockItem,
         deleteStockItem,
+        stockOpnameSessions,
+        activeStockOpname,
+        isStockLockedForOpname,
+        startStockOpname,
+        scanOrUpdateOpnameItem,
+        completeStockOpname,
+        cancelStockOpname,
+        locationTransferRequests,
+        createLocationTransferRequest,
+        approveLocationTransferRequest,
+        rejectLocationTransferRequest,
         selectedDocumentForPrint,
         openPrintPreview,
         closePrintPreview,
         resetToDefaultData,
+        resetAllTransactionsAndStock,
       }}
     >
       {children}

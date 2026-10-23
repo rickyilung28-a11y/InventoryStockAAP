@@ -201,12 +201,12 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
     const ledgerHeaders = [
       [companyProfile.companyName || 'PT. ABADI AGROSINDO PERSADA'],
       ['KARTU STOK & LAPORAN MUTASI BARANG'],
-      [`Filter SKU: ${selectedSku === 'ALL' ? 'Semua Barang' : selectedSku} | Periode: ${periodInfo}`],
+      [`Filter Material Code: ${selectedSku === 'ALL' ? 'Semua Barang' : selectedSku} | Periode: ${periodInfo}`],
       [],
       [
         'No',
         'Waktu Transaksi',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Tipe Aliran',
         'Kategori Keluar',
@@ -264,7 +264,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
       [],
       [
         'No',
-        'Kode SKU',
+        'Material Code',
         'Nama Barang',
         'Kategori Sub-Master',
         'Satuan',
@@ -422,7 +422,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
                   velocityFilter === 'FAST_MOVING' ? 'text-orange-100' : 'text-slate-600'
                 }`}
               >
-                {velocityCounts.fast} SKU dengan perputaran keluar tinggi
+                {velocityCounts.fast} Material Code dengan perputaran keluar tinggi
               </p>
             </div>
             <span className="text-lg font-mono font-black">{velocityCounts.fast}</span>
@@ -453,7 +453,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
                   velocityFilter === 'MEDIUM_MOVING' ? 'text-blue-100' : 'text-slate-600'
                 }`}
               >
-                {velocityCounts.medium} SKU dengan perputaran keluar sedang
+                {velocityCounts.medium} Material Code dengan perputaran keluar sedang
               </p>
             </div>
             <span className="text-lg font-mono font-black">{velocityCounts.medium}</span>
@@ -484,7 +484,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
                   velocityFilter === 'LOW_MOVING' ? 'text-slate-200' : 'text-slate-600'
                 }`}
               >
-                {velocityCounts.low} SKU jarang keluar / slow moving
+                {velocityCounts.low} Material Code jarang keluar / slow moving
               </p>
             </div>
             <span className="text-lg font-mono font-black">{velocityCounts.low}</span>
@@ -610,7 +610,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
                   onChange={(e) => setSelectedSku(e.target.value)}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-medium text-slate-800 focus:ring-1 focus:ring-slate-900 focus:outline-hidden"
                 >
-                  <option value="ALL">Semua Barang ({stockItems.length} SKU)</option>
+                  <option value="ALL">Semua Barang ({stockItems.length} Material Code)</option>
                   {stockItems.map((item) => (
                     <option key={item.id} value={item.sku}>
                       {item.sku} — {item.name} (Min: {item.minStock} {item.unit})
@@ -661,7 +661,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari SKU, barang, no nota..."
+              placeholder="Cari Material Code, barang, no nota..."
               className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-slate-900 focus:bg-white focus:outline-hidden"
             />
           </div>
@@ -675,7 +675,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
             <table className="w-full text-xs text-left">
               <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                 <tr>
-                  <th className="px-4 py-3">Kode SKU</th>
+                  <th className="px-4 py-3">Material Code</th>
                   <th className="px-4 py-3">Nama Barang</th>
                   <th className="px-4 py-3">Kategori Sub-Master</th>
                   <th className="px-4 py-3 text-right">Stok Saat Ini</th>
@@ -729,7 +729,7 @@ export const StockMovementView: React.FC<StockMovementViewProps> = ({ preselecte
                 <thead className="bg-slate-100 text-slate-700 font-semibold border-b border-slate-200">
                   <tr>
                     <th className="px-4 py-3">Waktu Transaksi</th>
-                    <th className="px-4 py-3">Kode SKU</th>
+                    <th className="px-4 py-3">Material Code</th>
                     <th className="px-4 py-3">Nama Barang</th>
                     <th className="px-4 py-3 text-center">Kategori Keluar</th>
                     <th className="px-4 py-3 text-center">Tipe Aliran</th>
